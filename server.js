@@ -15,7 +15,7 @@ const ADMIN_IDS = [
 ];
 
 // 📡 ลิงก์เชื่อมโยงไปยังฐานข้อมูล Firebase ถาวร 
-const FIREBASE_URL = "https://bottest-cddcc-default-rtdb.asia-southeast1.firebasedatabase.app/"; 
+const FIREBASE_URL = "https://my-pokdeng-bot-default-rtdb.asia-southeast1.firebasedatabase.app/"; 
 
 let usersWallets = {};
 let nextMemberId = 1;
@@ -31,6 +31,7 @@ let pastRoundsData = {}; //  ถังเก็บประวัติโพย
 let withdrawQueue = []; // 📦 ถังสำหรับเก็บคิวสมาชิกที่แจ้งถอนเงิน
 let usersRoundCrossCheck = {}; // 🌟 เพิ่มบรรทัดนี้ไว้บนสุดของไฟล์
 global.depositQueue = {}; // 👈 เพิ่มบรรทัดนี้เพื่อเตรียมถังคิวฝากเงินออโต้ไม่ให้เป็นค่าว่างครับน้า!
+if (!global.satangCounter) global.satangCounter = 0;
 
 // 🔄 ฟังก์ชันอัตโนมัติ: ดึงข้อมูลจาก Firebase มาอัปเดตลงในบอททันทีที่เปิดเครื่อง (แก้ไขดึงครบทุกกล่องแล้ว)
 async function loadDataFromFirebase() {
@@ -54,6 +55,58 @@ async function loadDataFromFirebase() {
     }
 }
 loadDataFromFirebase(); // สั่งให้ทำงานทันทีที่บอทรัน
+
+// 🤖 [ระบบฝากออโต้] ฟังก์ชันตรวจสอบยอดเงินจากเศษสตางค์
+async function checkAutoDeposit() {
+    if (!global.depositQueue) return;
+    
+    try {
+        // 💡 ดึงข้อมูล Statement ล่าสุดของน้าจาก API หรือจุดเช็กยอดโอน (ตัวอย่างจำลองสถานการณ์)
+        // const response = await axios.get('ลิงก์_API_เช็กยอดโอนของน้า');
+        // const bankTransactions = response.data.transactions || [];
+        
+        const bankTransactions = global.bankTransactions || []; // 📝 เปลี่ยนเป็นข้อมูลสเตทเม้นท์จริงที่ดึงได้นะน้า
+
+        for (let userId in global.depositQueue) {
+            const queue = global.depositQueue[userId];
+
+            if (!queue || queue.status !== 'WAITING_ADMIN') continue;
+
+            // 🔍 ค้นหาในรายการโอนเงินว่ามียอดเงิน + เศษสตางค์ที่ตรงกับคิวไหม
+            const matchIndex = bankTransactions.findIndex(tx => 
+                parseFloat(tx.amount).toFixed(2) === parseFloat(queue.displayAmount).toFixed(2)
+            );
+
+            // 💰 2. ถ้ามียอดโอนตรงกับเศษสตางค์ที่กำหนดไว้
+            if (matchIndex !== -1) {
+                const user = usersWallets[userId];
+
+                if (user) {
+                    // 2.1 เติมเครดิตเข้ากระเป๋าผู้ใช้ทันที
+                    user.balance = (user.balance || 0) + Number(queue.rawAmount);
+
+                    // 2.2 เซฟข้อมูลถาวรลง Firebase
+                    await saveDataToFirebase();
+
+                    // 2.3 ลบลายเซ็นรายการโอนนี้ออกจาก bankTransactions (กันสแกนซ้ำ)
+                    bankTransactions.splice(matchIndex, 1);
+
+                    // 2.4 ล้างคิวฝากของยูสเซอร์รายนี้ออก
+                    delete global.depositQueue[userId];
+
+                    // 📝 แสดง Log ใน Server ให้แอดมินรู้ว่าเติมเรียบร้อยแล้ว
+                    console.log(`✅ [เติมเงียบสำเร็จ] ยูสเซอร์ [${user.memberNumber || '-'}] ${user.nickname || user.name} | ยอด ${queue.displayAmount} ฿ -> เครดิตใหม่: ${user.balance} ฿`);
+                }
+            }
+        }
+    } catch (err) {
+        console.error("❌ ระบบตรวจสอบฝากออโต้ผิดพลาด:", err.message);
+    }
+}
+
+// ⏱️ สั่งให้ระบบลูปตรวจสอบทุกๆ 10-30 วินาทีอัตโนมัติ
+setInterval(checkAutoDeposit, 15000);
+
 
 // 💾 ฟังก์ชันอัตโนมัติ: สั่งบันทึกข้อมูลปัจจุบันยิงกลับไปเก็บที่ตึก Firebase
 async function saveDataToFirebase() {
@@ -301,92 +354,14 @@ app.post('/callback', async (req, res) => {
                         // 🧼 2. ล้างคิวฝากเงินชิ้นนี้ทิ้ง ป้องกันสลิปซ้ำ
                         delete global.depositQueue[foundUserId];
 
+                        // 🎯 [เพิ่มจุดนี้] ถ้าระบบไม่มีคิวฝากค้างอยู่เลย ให้รีเซ็ตเศษสตางค์กลับไปเริ่ม 0.01 ใหม่
+                        if (Object.keys(global.depositQueue).length === 0) {
+                            global.satangCounter = 0;
+                        }
+
                         // 💾 3. บันทึกลง Firebase ถาวรทันที
                         await saveDataToFirebase();
-
-                       // 💬 4. ยิง Flex Message ประกาศความยินดีเข้ากลุ่มไลน์ (แบบหรูหรา ธีมเขียวนีออน-ดำ)
-                        try {
-                            const depositSuccessFlex = {
-                                "type": "flex",
-                                "altText": `🎉 ฝากเงินออโต้สำเร็จ +${matchedQueue.rawAmount} บาท`,
-                                "contents": {
-                                    "type": "bubble",
-                                    "styles": {
-                                        "body": { "backgroundColor": "#0d1b15" },
-                                        "footer": { "backgroundColor": "#09120e" }
-                                    },
-                                    "body": {
-                                        "type": "box",
-                                        "layout": "vertical",
-                                        "spacing": "md",
-                                        "contents": [
-                                            { "type": "text", "text": "🎉 ฝากเงินออโต้สำเร็จ!", "weight": "bold", "color": "#00ff88", "size": "md", "align": "center" },
-                                            { "type": "separator", "color": "#183327" },
-                                            {
-                                                "type": "box",
-                                                "layout": "vertical",
-                                                "spacing": "sm",
-                                                "contents": [
-                                                    {
-                                                        "type": "box",
-                                                        "layout": "horizontal",
-                                                        "contents": [
-                                                            { "type": "text", "text": "👤 ลูกค้า:", "size": "sm", "color": "#8caf9c" },
-                                                            { "type": "text", "text": `คุณ ${usersWallets[foundUserId].name}`, "size": "sm", "color": "#ffffff", "weight": "bold", "align": "end" }
-                                                        ]
-                                                    },
-                                                    {
-                                                        "type": "box",
-                                                        "layout": "horizontal",
-                                                        "contents": [
-                                                            { "type": "text", "text": "🆔 สมาชิกเลขที่:", "size": "sm", "color": "#8caf9c" },
-                                                            { "type": "text", "text": `${usersWallets[foundUserId].memberNumber}`, "size": "sm", "color": "#ffffff", "weight": "bold", "align": "end" }
-                                                        ]
-                                                    },
-                                                    {
-                                                        "type": "box",
-                                                        "layout": "horizontal",
-                                                        "contents": [
-                                                            { "type": "text", "text": "💰 เติมเครดิต:", "size": "sm", "color": "#8caf9c" },
-                                                            { "type": "text", "text": `+${matchedQueue.rawAmount} บาท`, "size": "md", "color": "#00ff88", "weight": "bold", "align": "end" }
-                                                        ]
-                                                    }
-                                                ]
-                                            },
-                                            { "type": "separator", "color": "#183327" },
-                                            {
-                                                "type": "box",
-                                                "layout": "horizontal",
-                                                "contents": [
-                                                    { "type": "text", "text": "💳 เครดิตสุทธิ:", "size": "sm", "color": "#ffffff" },
-                                                    { "type": "text", "text": `${usersWallets[foundUserId].balance} บาท`, "size": "md", "color": "#00ff88", "weight": "bold", "align": "end" }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    "footer": {
-                                        "type": "box",
-                                        "layout": "vertical",
-                                        "contents": [
-                                            { "type": "text", "text": "🏁 เครดิตเข้าแล้ว ขอให้สนุกกับการเดิมพันค่ะ! 🃏", "size": "xs", "color": "#aaaaaa", "align": "center" }
-                                        ]
-                                    }
-                                }
-                            };
-
-                            // ยิงประกาศเข้ากลุ่มหลักของน้า
-                            await axios.post('https://api.line.me/v2/bot/message/push', {
-                                to: "Cbf8eb92a5bcfbaa418b3c49bf14c2ac7", // ไอดีกลุ่ม LINE ของน้า
-                                messages: [depositSuccessFlex]
-                            }, {
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'Authorization': `Bearer ${TOKEN}`
-                                }
-                            });
-                        } catch (pushErr) {
-                            console.error("❌ ส่ง Flex ฝากออโต้ลงกลุ่มล้มเหลว:", pushErr.message);
-                        }
+                        
                     } else {
                         console.log(`⚠️ พบยอดโอนตรงในคิว แต่ยูสเซอร์ ${foundUserId} ไม่มีกระเป๋าเงินในระบบ`);
                     }
@@ -430,6 +405,11 @@ app.post('/callback', async (req, res) => {
                                     
                                     // 🧼 ล้างคิวฝากทิ้งทันที
                                     delete global.depositQueue[foundUserKey]; 
+
+                                    // 🎯 [เพิ่มจุดนี้] ถ้าระบบไม่มีคิวฝากค้างอยู่เลย ให้รีเซ็ตเศษสตางค์กลับไปเริ่ม 0.01 ใหม่
+                                    if (Object.keys(global.depositQueue).length === 0) {
+                                        global.satangCounter = 0;
+                                     }
 
                                     await saveDataToFirebase(); 
                                     replyText = `💰 เติมเครดิตสมาชิกที่ ${user.memberNumber} \n คุณ ${user.name} +${amount} สำเร็จ!\n──────────────────\nยอดสุทธิ: ${user.balance} บาท`;
@@ -656,9 +636,10 @@ app.post('/callback', async (req, res) => {
                 }
             }
 // ==================== [ ระบบแจ้งฝากเงินสุ่มเศษสตางค์ ] ====================
-            else if (command === "ฝาก") {
-                const amount = parseInt(args[1]);
-
+               else if (userMsg.startsWith("ฝาก")) {
+            // 🔍 ดึงตัวเลขด้วยวิธีเดียวกับระบบถอนของน้าเป๊ะๆ เลยครับ!
+            const amount = parseInt(userMsg.replace('ฝาก', '').trim());
+                   
                 if (!amount || isNaN(amount) || amount <= 0) {
                     try {
                         await axios.post('https://api.line.me/v2/bot/message/reply', {
@@ -778,88 +759,101 @@ app.post('/callback', async (req, res) => {
                             } catch (err) { console.error("Error sending pending deposit alert flex:", err); }
                             return res.sendStatus(200);
                         } else {
-                            const randomSatang = (Math.floor(Math.random() * 99) + 1) / 100;
-                            const totalWithSatang = amount + randomSatang;
+                            global.satangCounter = (global.satangCounter % 99) + 1;
+                            const satangValue = global.satangCounter / 100;
+                            const totalWithSatang = amount + satangValue;
                             const displayAmount = totalWithSatang.toFixed(2);
 
-                            global.depositQueue[userId] = {
-                                memberId: walletData.memberNumber,
-                                name: walletData.name || 'ไม่ระบุชื่อ',
-                                rawAmount: amount,
-                                displayAmount: displayAmount,
-                                status: 'WAITING_ADMIN'
-                            };
+// 🎯 1. ดึง Payload PromptPay จากเลข 15 หลัก K PLUS
+const generatePayload = require('promptpay-qr');
+const promptpayNumber = "004999031203416"; // 👈 เลข 15 หลัก K PLUS ของน้า
+const payload = generatePayload(promptpayNumber, { amount: Number(displayAmount) });
 
-                            // ==================== [ 🚀 ยิง Flex Message ใบแจ้งฝากสไตล์บิลธนาคารสีเขียวนีออน ] ====================
-                            try {
-                                await axios.post('https://api.line.me/v2/bot/message/reply', {
-                                    replyToken: replyToken,
-                                    messages: [
-                                        {
-                                            "type": "flex",
-                                            "altText": `📥 ใบสั่งฝากเครดิต ยอดโอน: ${displayAmount} บาท`,
-                                            "contents": {
-                                                "type": "bubble",
-                                                "styles": { "body": { "backgroundColor": "#09120e" } },
-                                                "body": {
-                                                    "type": "box",
-                                                    "layout": "vertical",
-                                                    "spacing": "md",
-                                                    "contents": [
-                                                        { "type": "text", "text": "📥 ใบสั่งรายการฝากเงิน", "weight": "bold", "color": "#00ff88", "size": "md", "align": "center" },
-                                                        { "type": "separator", "color": "#12251c" },
-                                                        {
-                                                            "type": "box",
-                                                            "layout": "vertical",
-                                                            "spacing": "xs",
-                                                            "contents": [
-                                                                { "type": "text", "text": "💸 กรุณาโอนเงินยอดสุทธิ:", "size": "xs", "color": "#8caf9c" },
-                                                                { "type": "text", "text": `${displayAmount} บาท`, "size": "xxl", "color": "#00ff88", "weight": "bold", "align": "center", "margin": "sm" },
-                                                                { "type": "text", "text": "(กรุณาโอนเศษสตางค์ให้ตรงเพื่ออัปยอดไวที่สุด)", "size": "10px", "color": "#ffaa00", "align": "center" }
-                                                            ]
-                                                        },
-                                                        { "type": "separator", "color": "#12251c" },
-                                                        { "type": "text", "text": "🏦 บัญชีสำหรับรับโอนเงิน", "size": "xs", "color": "#00ff88", "weight": "bold" },
-                                                        {
-                                                            "type": "box",
-                                                            "layout": "vertical",
-                                                            "backgroundColor": "#0f1f17",
-                                                            "paddingAll": "md",
-                                                            "spacing": "xs",
-                                                            "contents": [
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "ธนาคาร:", "size": "xs", "color": "#8caf9c" },
-                                                                        { "type": "text", "text": "กสิกรไทย", "size": "xs", "color": "#ffffff", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "เลขบัญชี:", "size": "xs", "color": "#8caf9c" },
-                                                                        { "type": "text", "text": "037-1556-125", "size": "xs", "color": "#00ff88", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "ชื่อบัญชี:", "size": "xs", "color": "#8caf9c" },
-                                                                        { "type": "text", "text": "นาย ภาณุวัฒก์ ก้องกุล", "size": "xs", "color": "#ffffff", "align": "end" }
-                                                                    ]
-                                                                }
-                                                            ]
-                                                        },
-                                                        { "type": "separator", "color": "#12251c" },
-                                                        { "type": "text", "text": "⚠️ สำคัญมาก: กรุณาโอนตามยอดที่มีเศษสตางค์ด้านบนให้ตรง แล้วส่งสลิปเพื่อยืนยันรายการค่ะ", "size": "11px", "color": "#ff4444", "wrap": true, "align": "center", "weight": "bold" }
-                                                    ]
-                                                }
-                                            }
-                                        }
-                                    ]
-                                }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` } });
-                            } catch (err) { console.error("Error sending deposit bill flex:", err); }
-                        }
+// 🎯 2. สร้างลิงก์รูปภาพ QR Code ชัดๆ ผ่าน API ปลอดภัย
+const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(payload)}`;
+
+global.depositQueue[userId] = {
+    memberId: walletData.memberNumber,
+    name: walletData.name || 'ไม่ระบุชื่อ',
+    rawAmount: amount,
+    displayAmount: displayAmount,
+    status: 'WAITING_ADMIN'
+};
+
+                            // ==================== [ 🚀 ใบแจ้งฝากสไตล์บิลธนาคาร + QR Code แบบย่อ ] ====================
+try {
+    // 🔍 ดึงชื่อเล่นจากข้อมูลสมาชิก (ถ้าไม่มีให้แสดงเป็นชื่อเต็ม หรือ fallback เป็น 'สมาชิก')
+    const nickname = walletData.nickname || walletData.name || 'สมาชิก';
+    const memberId = walletData.memberNumber || walletData.memberId || '-';
+    await axios.post('https://api.line.me/v2/bot/message/reply', {
+        replyToken: replyToken,
+        messages: [
+            {
+                "type": "flex",
+                "altText": `📥 ใบสั่งฝากเครดิต ยอดโอน: ${displayAmount} บาท`,
+                "contents": {
+                    "type": "bubble",
+                    "styles": { "body": { "backgroundColor": "#09120e" } },
+                    "body": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "spacing": "md",
+                        "contents": [
+                            { "type": "text", "text": "📥 ใบสั่งรายการฝากเงิน", "weight": "bold", "color": "#00ff88", "size": "md", "align": "center" },
+                            {
+                                "type": "box",
+                                "layout": "horizontal",
+                                "backgroundColor": "#0f1f17",
+                                "paddingAll": "sm",
+                                "contents": [
+                                    { "type": "text", "text": `👤 คุณ: ${nickname}`, "size": "xs", "color": "#ffffff", "weight": "bold" },
+                                    { "type": "text", "text": `ID: ${memberId}`, "size": "xs", "color": "#00ff88", "align": "end", "weight": "bold" }
+                                ]
+                            },
+                            { "type": "separator", "color": "#12251c" },
+                            {
+                                "type": "box",
+                                "layout": "vertical",
+                                "spacing": "xs",
+                                "contents": [
+                                    { "type": "text", "text": "💸 กรุณาโอนเงินยอดสุทธิ:", "size": "xs", "color": "#8caf9c" },
+                                    { "type": "text", "text": `${displayAmount} บาท`, "size": "xxl", "color": "#00ff88", "weight": "bold", "align": "center", "margin": "sm" },
+                                    { "type": "text", "text": "(กรุณาโอนเศษสตางค์ให้ตรงเพื่ออัปยอดไวที่สุด)", "size": "10px", "color": "#ffaa00", "align": "center" }
+                                ]
+                            },
+                            {
+                                "type": "image",
+                                "url": qrCodeUrl,
+                                "size": "4xl",
+                                "aspectRatio": "1:1",
+                                "aspectMode": "fit",
+                                "margin": "md"
+                            },
+                            { "type": "separator", "color": "#12251c" },
+                            // เหลือไว้เฉพาะชื่อบัญชีตามที่ต้องการ
+                            { 
+                                "type": "text", 
+                                "text": "👤 ชื่อบัญชี: นาย ภาณุวัฒก์ ก้องกุล", 
+                                "size": "xs", 
+                                "color": "#ffffff", 
+                                "align": "center", 
+                                "weight": "bold" 
+                            },
+                            { "type": "separator", "color": "#12251c" },
+                            { "type": "text", "text": "⚠️ โอนตามยอดที่มีเศษสตางค์ แล้วส่งสลิปเพื่อยืนยันรายการได้เลยครับ", "size": "11px", "color": "#ff4444", "wrap": true, "align": "center", "weight": "bold" }
+                        ]
                     }
                 }
-            }                
+            }
+        ]
+    }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` } });
+} catch (err) { 
+    console.error("Error sending deposit bill flex:", err.response ? err.response.data : err.message); 
+}
+                    }
+                }
+            }
+               }
 
                 // ==================== [ คำสั่งแอดมิน: ชถ (เช็กรายการรอถอนเงินทั้งหมด) ] ====================
             else if (userMsg.trim() === 'ชถ') {
@@ -897,10 +891,7 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
         if (userMsg === 'o') {
             if (isRoundOpen) {
                 replyText = `⚠️ ตอนนี้ระบบกำลังเปิด "รอบที่ ${currentRound}" อยู่แล้วครับ`;
-            } 
-            else if (isDrawOpen) { 
-                replyText = `❌ ไม่สามารถเปิดรอบใหม่ได้ครับ!\nเนื่องจาก "รอบที่ ${currentRound}" ยังดำเนินรายการจั่วไพ่ไม่เสร็จสิ้น\n\n💡 หากต้องการเปิดรอบจั่ว ให้พิมพ์ oo\n💡 หากต้องการจบขั้นตอนจั่ว ให้พิมพ์ xx ก่อนครับ`;
-            } else {
+            }  else {
                 currentRound++;
                 isRoundOpen = true;
                 roundBets = {}; // ล้างข้อมูลโพยเก่าออกเพื่อเริ่มรอบใหม่
@@ -998,8 +989,8 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
                     const type = bet.betType;
                     const price = bet.pricePerLeg || 0;
 
-                    if (type === "มข") return `เหมาขวา (${price}/ขา)`;
-                    if (type === "มจ") return `เหมาเจ้า (${price}/ขา)`;
+                    if (type === "รข") return `เหมาขวา (${price}/ขา)`;
+                    if (type === "รจ") return `เหมาเจ้า (${price}/ขา)`;
                     if (type.startsWith('จ')) {
                         const legs = type.substring(1).split('').join(', ');
                         return `แทงเจ้าสู้ขา ${legs} (${price}/ขา)`;
@@ -1115,7 +1106,7 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
                                 { "type": "text", "text": "📝 สรุปยอดแทงประจำรอบ", "size": "xs", "color": "#FFCE00", "weight": "bold" },
                                 { "type": "box", "layout": "vertical", "spacing": "xs", "contents": pageContents },
                                 { "type": "separator", "color": "#3a2222" },
-                                { "type": "text", "text": "🔒 หยุดรับโพยทุกกรณี รอแอดมินเปิดรอบจั่ว", "size": "sm", "color": "#E9100F", "wrap": true, "align": "center", "weight": "bold" }
+                                { "type": "text", "text": "🔒 หยุดรับโพยทุกกรณี รอแอดมินส่งผล", "size": "sm", "color": "#E9100F", "wrap": true, "align": "center", "weight": "bold" }
                             ]
                         }
                     }));
@@ -1164,224 +1155,7 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
         }
     }
 }
-            // ==================== [ 3. แอดมิน เปิด/ปิดรอบจั่วไพ่ - เวอร์ชันบล็อกพิมพ์ซ้ำ ] ====================
-else if (userMsg === 'oo' || userMsg === 'xx') {
-    if (!ADMIN_IDS.includes(userId)) {
-        replyText = "❌ คุณไม่ใช่แอดมิน ไม่มีสิทธิ์ใช้คำสั่งนี้ครับ";
-    } else {
-        // 🖼️ [ตั้งค่าลิงก์รูปภาพของน้าที่นี่]
-        // ⚠️ น้าเอาลิงก์ URL รูปภาพเปิดจั่ว/ปิดจั่วของน้า (ที่ขึ้นต้นด้วย https://) มาใส่แทนที่ได้เลยครับ
-        const openDrawImgUrl = "https://img2.pic.in.th/-__-----7fcbb7b1eadadfe1.jpg";
-        const closeDrawImgUrl = "https://img2.pic.in.th/-__-----17ded3ef1c297156";
-
-        // 🟢 [ฝั่งเปิดรอบจั่ว oo]
-        if (userMsg === 'oo') {
-            if (isRoundOpen) {
-                replyText = "⚠️ ต้องพิมพ์ปิดรอบแทง (X) ก่อน จึงจะเปิดรอบจั่วได้ครับ";
-            } else if (isDrawOpen) {
-                replyText = `⚠️ ตอนนี้ระบบกำลังเปิด "รอบขอจั่วไพ่ใบที่ 3" อยู่แล้วครับ ไม่จำเป็นต้องเปิดซ้ำครับ`;
-            } else {
-                isDrawOpen = true; // เปิดสิทธิ์ให้บอทรับคำสั่งเครื่องหมาย + จากสมาชิก
-
-                // 🚀 ยิงข้อความแพ็คคู่: [1. รูปภาพเปิดจั่วของน้า] + [2. Flex Message เปิดจั่วอย่างเป็นทางการ]
-                try {
-                    await axios.post('https://api.line.me/v2/bot/message/reply', {
-                        replyToken: replyToken,
-                        messages: [
-                            // 📸 ข้อความที่ 1: รูปเปิดจั่วของน้า
-                            {
-                                "type": "image",
-                                "originalContentUrl": openDrawImgUrl,
-                                "previewImageUrl": openDrawImgUrl
-                            },
-                            // 📊 ข้อความที่ 2: Flex Message เปิดจั่ว
-                            {
-                                "type": "flex",
-                                "altText": `🃏 เปิดรอบขอจั่วไพ่ใบที่ 3 (รอบที่ ${currentRound})`,
-                                "contents": {
-                                    "type": "bubble",
-                                    "styles": { "body": { "backgroundColor": "#0b1528" } }, // ธีมน้ำเงินเข้มคาสิโน
-                                    "body": {
-                                        "type": "box", "layout": "vertical", "spacing": "md",
-                                        "contents": [
-                                            { "type": "text", "text": "🃏 เปิดรอบขอจั่วไพ่ใบที่ 3 แล้วครับ 🎉", "weight": "bold", "color": "#3399ff", "size": "md", "align": "center" },
-                                            { "type": "text", "text": `รอบที่: ${currentRound}`, "weight": "bold", "color": "#ffffff", "size": "lg", "align": "center", "margin": "none" },
-                                            { "type": "separator", "color": "#1b2a47" },
-                                            { "type": "text", "text": "💡 สำหรับสมาชิกที่ต้องการจั่วไพ่เพิ่ม\nให้พิมพ์เลขขาตามด้วยเครื่องหมายบวก (+)\nเช่น พิมพ์ \"1+\" หรือ \"12+\"", "size": "sm", "color": "#dddddd", "wrap": true, "align": "center" },
-                                            { "type": "separator", "color": "#1b2a47" },
-                                            { "type": "text", "text": "⚠️ หากขาไหนต้องการอยู่ (ไม่จั่ว) ไม่ต้องพิมพ์อะไรส่งมาครับ", "size": "xs", "color": "#ffcc00", "wrap": true, "align": "center" }
-                                        ]
-                                    }
-                                }
-                            }
-                        ]
-                    }, {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${TOKEN}`
-                        }
-                    });
-                } catch (error) {
-                    console.error("❌ ส่งรูปภาพและ Flex เปิดจั่วล้มเหลว:", error.response ? error.response.data : error.message);
-                }
-                return; // จบกระบวนการเปิดจั่วอย่างสมบูรณ์ บอทไม่ทำงานซ้ำซ้อน
-            }
-        } 
-        // 🔴 [ฝั่งปิดรอบจั่ว xx + สรุปรายละเอียดรายบุคคล]
-        else if (userMsg === 'xx') {
-            if (!isDrawOpen) {
-                replyText = "⚠️ ระบบปิดรอบจั่วไพ่อยู่แล้วครับ ไม่สามารถปิดซ้ำได้";
-            } else {
-                // 1. ปิดระบบรับรอบจั่วทันที
-                isDrawOpen = false;
-
-                // 2. ดำเนินการวนลูปดึงข้อมูลจากโค้ดหลักของน้าแบบไม่มีตกหล่น
-                let summaryFlexContents = [];
-                let hasBets = false;
-
-                // วนลูปเช็กข้อมูลโพยของทุกคนในรอบนี้ (ตามตรรกะเดิมเป๊ะๆ)
-                for (let uid in roundBets) {
-                    const userBetsArray = roundBets[uid];
-                    if (userBetsArray && userBetsArray.length > 0) {
-                        hasBets = true;
-                        const user = usersWallets[uid] || {}; // ดึงข้อมูลโปรไฟล์สมาชิก
-
-                        // 💡 ดึงชื่อเล่น (ถ้าน้าไม่ได้ตั้ง nickname ไว้ ระบบจะถอยไปใช้ user.name อัตโนมัติ)
-                        const displayName = user.nickname || user.name || "สมาชิก";
-
-                        let totalRealPlay = 0; // ยอดเล่นรวมจริง
-                        let totalWithBounce = 0; // ยอดค้ำประกัน (รวมค้ำเด้ง 3 เท่า)
-                        let betLegsDetail = []; // เก็บรายละเอียดเบอร์ขาที่แทง
-                        let drawLegsDetail = []; // เก็บรายละเอียดขาที่ขอจั่วเพิ่ม
-
-                        userBetsArray.forEach((bet) => {
-                            // คำนวณเบอร์ขาฝั่งผู้เล่นปกติ
-                            if (bet.betType !== "มข" && bet.betType !== "มจ" && !bet.betType.startsWith('จ')) {
-                                const individualLegs = bet.betType.split('');
-                                individualLegs.forEach((leg) => {
-                                    if (!betLegsDetail.includes(leg)) betLegsDetail.push(leg);
-                                    
-                                    // เช็กสถานะการจั่วใบที่ 3 ของขานี้
-                                    if (bet.drawStatus && bet.drawStatus[leg] === "จั่ว") {
-                                        if (!drawLegsDetail.includes(leg)) drawLegsDetail.push(leg);
-                                    }
-                                });
-                            } 
-                            // สำหรับกรณีแทงพิเศษอื่นๆ (มข / มจ / ขาเจ้ามือ)
-                            else {
-                                if (!betLegsDetail.includes(bet.betType)) {
-                                    betLegsDetail.push(bet.betType);
-                                }
-                            }
-
-                            // คำนวณยอดเงินรวม
-                            totalRealPlay += bet.totalPrice || bet.actualBet; // รองรับโครงสร้างชื่อตัวแปรของโพย
-                            totalWithBounce += bet.holdCost; // ดึงยอดค้ำเด้ง 3 เท่าที่ระบบหักไว้จริงมาแสดง
-                        });
-
-                        // จัดเรียงรายชื่อขาให้สวยงามเพื่ออ่านง่าย
-                        const legsStr = betLegsDetail.sort().join(', ');
-                        const drawStr = drawLegsDetail.length > 0 ? drawLegsDetail.sort().join(', ') : "ไม่มี (อยู่ 2 ใบ)";
-
-                        // นำข้อมูลที่ประมวลผลได้มาแพ็คใส่รูปแบบ Flex Layout เพื่อความสวยงามและแสดงผลเป็นระเบียบ
-                        summaryFlexContents.push({
-                            "type": "box", "layout": "vertical", "margin": "md", "spacing": "xs",
-                            "contents": [
-                                { "type": "text", "text": `👤 [ ${user.memberNumber || '-'} ] ${displayName}`, "weight": "bold", "color": "#ffffff", "size": "sm" },
-                                {
-                                    "type": "box", "layout": "horizontal",
-                                    "contents": [
-                                        { "type": "text", "text": `👉 แทงขา: [ ${legsStr} ]`, "size": "xs", "color": "#cccccc", "flex": 5 },
-                                        { "type": "text", "text": `🃏 จั่วเพิ่ม: [ ${drawStr} ]`, "size": "xs", "color": "#3399ff", "flex": 5, "weight": "bold", "align": "end" }
-                                    ]
-                                },
-                                {
-                                    "type": "box", "layout": "horizontal",
-                                    "contents": [
-                                        { "type": "text", "text": `💰 ยอดเล่น: ${totalRealPlay} ฿`, "size": "xs", "color": "#aaaaaa", "flex": 5 },
-                                        { "type": "text", "text": `(รวมค้ำ: ${totalWithBounce} ฿)`, "size": "xs", "color": "#00ff66", "flex": 5, "align": "end", "weight": "bold" }
-                                    ]
-                                },
-                                { "type": "separator", "color": "#2c2214", "margin": "xs" }
-                            ]
-                        });
-                    }
-                }
-
-                if (!hasBets) {
-                    summaryFlexContents.push({
-                        "type": "text",
-                        "text": "• รอบนี้ไม่มีสมาชิกส่งโพยเดิมพันเข้ามาครับ",
-                        "size": "sm",
-                        "color": "#888888",
-                        "style": "italic",
-                        "align": "center"
-                    });
-                }
-
-                // 🚀 ยิงข้อความแพ็คคู่: [1. รูปภาพปิดจั่วของน้า] + [2. Flex Message สรุปโพยและการจั่วรายบุคคล]
-                try {
-                    // 1. แบ่งกลุ่มการแสดงผล (Chunking) หน้าละ 3 รายชื่อ เพื่อไม่ให้ตัว Flex สรุปจั่วยาวจนเกินไป
-                    const chunkSize = 7; 
-                    const flexPages = [];
-                    for (let i = 0; i < summaryFlexContents.length; i += chunkSize) {
-                        flexPages.push(summaryFlexContents.slice(i, i + chunkSize));
-                    }
-
-                    // 2. ป้องกันข้อผิดพลาดกรณีไม่มีการส่งโพย
-                    if (flexPages.length === 0) {
-                        flexPages.push([{ "type": "text", "text": "ไม่มีรายการแทงในรอบนี้", "color": "#aaaaaa", "size": "xs", "align": "center" }]);
-                    }
-
-                    // 3. วนลูปสร้างหน้าการ์ด (Bubble Carousel)
-                    const carouselBubbles = flexPages.map((pageContents, index) => ({
-                        "type": "bubble",
-                        "styles": { "body": { "backgroundColor": "#1a140d" } },
-                        "body": {
-                            "type": "box", "layout": "vertical", "spacing": "sm",
-                            "contents": [
-                                { "type": "text", "text": "🔒 ปิดรอบขอจั่วไพ่เรียบร้อยแล้วครับ 🏁", "weight": "bold", "color": "#ffaa00", "size": "md", "align": "center" },
-                                { "type": "text", "text": `รอบที่: ${currentRound} (หน้า ${index + 1}/${flexPages.length})`, "size": "xs", "color": "#ffffff", "align": "center" },
-                                { "type": "separator", "color": "#3a2d1f" },
-                                { "type": "text", "text": "📋 รายงานสรุปโพยและการจั่วรายบุคคล", "size": "xs", "color": "#ffaa00", "weight": "bold" },
-                                { "type": "box", "layout": "vertical", "spacing": "xs", "contents": pageContents },
-                                { "type": "text", "text": "ℹ️ รอสรุปผลและคิดเงินสักครู่ครับ", "size": "xs", "color": "#aaaaaa", "align": "center", "margin": "sm" }
-                            ]
-                        }
-                    }));
-
-                    // 4. ยิง API ตอบกลับ
-                    await axios.post('https://api.line.me/v2/bot/message/reply', {
-                        replyToken: replyToken,
-                        messages: [
-                            {
-                                "type": "image",
-                                "originalContentUrl": closeDrawImgUrl,
-                                "previewImageUrl": closeDrawImgUrl
-                            },
-                            {
-                                "type": "flex",
-                                "altText": `🚫 ปิดรอบขอจั่วไพ่เรียบร้อยแล้ว (รอบที่ ${currentRound})`,
-                                "contents": {
-                                    "type": "carousel", // 👈 เปลี่ยนโครงสร้างเป็น carousel แบบสไลด์ข้าง
-                                    "contents": carouselBubbles
-                                }
-                            }
-                        ]
-                    }, {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': `Bearer ${TOKEN}`
-                        }
-                    });
-                } catch (error) {
-                    console.error("❌ ส่งรูปภาพและ Flex ปิดจั่วล้มเหลว:", error.response ? error.response.data : error.message);
-                }
-                return;
-            }
-        }
-    }
-}
+           
         // ==================== [ 4. ระบบรับโพยป๊อกเด้ง + หักค้ำประกัน 3 เด้ง ] ====================
             else if (originalMsg.includes('-') && !originalMsg.startsWith('C/') && !originalMsg.startsWith('c/')) {
                 if (!isRoundOpen) {
@@ -1433,7 +1207,7 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                         }
                         let betTracker = usersRoundCrossCheck[userId];
 
-                        const allowedLegs = ['1', '2', '3', '4'];
+                        const allowedLegs = ['1', '2', '3', '4', '5', '6'];
                         const MIN_BET = 10;
                         const MAX_BET = 2500;
 
@@ -1466,31 +1240,31 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                             let legsCount = 0;
                             let betTypeDetail = "";
 
-                            if (targetStr === "มข") {
-                                legsCount = 4;
-                                betTypeDetail = `เหมาขาผู้เล่นสู้เจ้ามือ (4 ขา) ขาละ ${price} บาท`;
-                                for (let c = 1; c <= 4; c++) {
+                            if (targetStr === "รข") {
+                                legsCount = 6;
+                                betTypeDetail = `เหมาขาผู้เล่นสู้เจ้ามือ (6 ขา) ขาละ ${price} บาท`;
+                                for (let c = 1; c <= 6; c++) {
                                     if (betTracker[c] && betTracker[c] === 'dealer') {
                                         hasError = true;
-                                        errorMsg = `❌ แทง มข ไม่ได้! ขา ${c} มีการแทงฝั่งเจ้ามือค้างไว้แล้วในรอบนี้`;
+                                        errorMsg = `❌ แทง รข ไม่ได้! ขา ${c} มีการแทงฝั่งเจ้ามือค้างไว้แล้วในรอบนี้`;
                                         break;
                                     }
                                 }
                                 if (hasError) break; 
-                                for (let c = 1; c <= 4; c++) { betTracker[c] = 'player'; }
+                                for (let c = 1; c <= 6; c++) { betTracker[c] = 'player'; }
                                 
-                            } else if (targetStr === "มจ") {
-                                legsCount = 4;
+                            } else if (targetStr === "รจ") {
+                                legsCount = 6;
                                 betTypeDetail = `แทงเจ้ามือสู้ทุกขา (4 ขา) ขาละ ${price} บาท`;
-                                for (let c = 1; c <= 4; c++) {
+                                for (let c = 1; c <= 6; c++) {
                                     if (betTracker[c] && betTracker[c] === 'player') {
                                         hasError = true;
-                                        errorMsg = `❌ แทง มจ ไม่ได้! ขา ${c} มีการแทงฝั่งผู้เล่นค้างไว้แล้วในรอบนี้`;
+                                        errorMsg = `❌ แทง รจ ไม่ได้! ขา ${c} มีการแทงฝั่งผู้เล่นค้างไว้แล้วในรอบนี้`;
                                         break;
                                     }
                                 }
                                 if (hasError) break; 
-                                for (let c = 1; c <= 4; c++) { betTracker[c] = 'dealer'; }
+                                for (let c = 1; c <= 6; c++) { betTracker[c] = 'dealer'; }
                             } else if (targetStr.startsWith('จ')) {
                                 const legs = targetStr.substring(1);
                                 if (legs === "") { 
@@ -1502,7 +1276,7 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                                 let isLegsValid = legs.split('').every(char => allowedLegs.includes(char));
                                 if (!isLegsValid) {
                                     hasError = true;
-                                    errorMsg = `❌ บันทึกโพยล้มเหลว! ห้องนี้มีแค่ ขา 1 ถึง ขา 4 เท่านั้นครับ\n(พบข้อผิดพลาดที่ขาเจ้ามือ: "${line}")`;
+                                    errorMsg = `❌ บันทึกโพยล้มเหลว! ห้องนี้มีแค่ ขา 1 ถึง ขา 6 เท่านั้นครับ\n(พบข้อผิดพลาดที่ขาเจ้ามือ: "${line}")`;
                                     break;
                                 }
                                 
@@ -1523,7 +1297,7 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                                 let isLegsValid = targetStr.split('').every(char => allowedLegs.includes(char));
                                 if (!isLegsValid) {
                                     hasError = true;
-                                    errorMsg = `❌ บันทึกโพยล้มเหลว! ห้องนี้มีแค่ ขา 1 ถึง ขา 4 เท่านั้นครับ\n(พบข้อผิดพลาดที่ขาผู้เล่น: "${line}")`;
+                                    errorMsg = `❌ บันทึกโพยล้มเหลว! ห้องนี้มีแค่ ขา 1 ถึง ขา 6 เท่านั้นครับ\n(พบข้อผิดพลาดที่ขาผู้เล่น: "${line}")`;
                                     break;
                                 }
                                 legsCount = targetStr.length;
@@ -1542,7 +1316,7 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                             }
 
                             let currentLineBet = price * legsCount;
-                            let currentLineHold = currentLineBet * 3;
+                            let currentLineHold = currentLineBet * 2;
 
                             totalActualBet += currentLineBet;
                             totalHoldCost += currentLineHold;
@@ -1556,140 +1330,6 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                             });
                         }
 
-                        // ==================== [ 🌟 เริ่มต้นระบบค้ำประกันเด้งอัจฉริยะ ] ====================
-                        if (!hasError && totalActualBet > 0) {
-                            let finalHoldCost = 0;
-                            let maxHandMultiplier = 3; 
-                            let limitReasonText = "✨ ค้ำประกัน 3 เด้งสมบูรณ์แบบ";
-
-                            const doubleHoldCost = totalActualBet * 2; 
-                            const tripleHoldCost = totalActualBet * 3; 
-
-                            if (user.balance < doubleHoldCost) {
-                                replyText = `❌ เครดิตของคุณไม่พอสำหรับค้ำประกันขั้นต่ำ (2 เด้ง) ครับ!\n💸 ยอดแทงรวม: ${totalActualBet} บาท\n🔒 ต้องใช้ยอดค้ำประกันขั้นต่ำ (x2): ${doubleHoldCost} บาท\n💰 เครดิตปัจจุบันของคุณมี: ${user.balance} บาท`;
-                                hasError = true;
-                            } 
-                            else if (user.balance >= doubleHoldCost && user.balance < tripleHoldCost) {
-                                maxHandMultiplier = 2;
-                                finalHoldCost = doubleHoldCost;
-                                limitReasonText = `⚠️ คิดผลสูงสุดไม่เกิน 2 เด้ง (เครดิตไม่พอค้ำ 3 เด้ง)`;
-                            } 
-                            else {
-                                maxHandMultiplier = 3;
-                                finalHoldCost = tripleHoldCost;
-                            }
-
-                            if (!hasError) {
-                                user.balance -= finalHoldCost; 
-                                await saveDataToFirebase();
-                                
-                                if (!roundBets[userId]) {
-                                    roundBets[userId] = [];
-                                }
-
-                                let itemsFlexContents = [];
-                                
-                                processedBets.forEach((bet) => {
-                                    roundBets[userId].push({
-                                        name: displayName,
-                                        memberNumber: user.memberNumber,
-                                        betType: bet.type,
-                                        detail: bet.detail,
-                                        pricePerLeg: bet.pricePerLeg,
-                                        actualBet: bet.actualBet,
-                                        holdCost: (bet.actualBet * maxHandMultiplier), 
-                                        maxMultiplier: maxHandMultiplier, 
-                                        time: new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })
-                                    });
-
-                                    itemsFlexContents.push({
-                                        "type": "text",
-                                        "text": `• ${bet.detail}`,
-                                        "size": "sm",
-                                        "color": "#dddddd",
-                                        "wrap": true
-                                    });
-                                });
-                                
-                                try {
-                                    await axios.post('https://api.line.me/v2/bot/message/reply', {
-                                        replyToken: replyToken,
-                                        messages: [{
-                                            "type": "flex",
-                                            "altText": "🧾 บันทึกโพยสำเร็จเรียบร้อยแล้ว",
-                                            "contents": {
-                                                "type": "bubble",
-                                                "styles": { "body": { "backgroundColor": "#111111" } },
-                                                "body": {
-                                                    "type": "box", "layout": "vertical", "spacing": "md",
-                                                    "contents": [
-                                                        { "type": "text", "text": "✅ บันทึกโพยเรียบร้อย 🎉", "weight": "bold", "color": "#ffcc00", "size": "md", "align": "center" },
-                                                        { "type": "separator", "color": "#333333" },
-                                                        {
-                                                            "type": "box", "layout": "horizontal",
-                                                            "contents": [
-                                                                { "type": "text", "text": "👤 ผู้แทง:", "size": "sm", "color": "#888888", "flex": 2 },
-                                                                { "type": "text", "text": `${displayName} (ID: ${user.memberNumber})`, "size": "sm", "color": "#ffffff", "flex": 5, "weight": "bold" }
-                                                            ]
-                                                        },
-                                                        { "type": "separator", "color": "#333333" },
-                                                        { "type": "text", "text": "📝 รายการแทง", "size": "xs", "color": "#ffcc00", "weight": "bold" },
-                                                        { "type": "box", "layout": "vertical", "spacing": "xs", "contents": itemsFlexContents },
-                                                        { "type": "separator", "color": "#333333" },
-                                                        {
-                                                            "type": "box", "layout": "vertical", "spacing": "xs",
-                                                            "contents": [
-                                                                {
-                                                                    "type": "box", "layout": "horizontal",
-                                                                    "contents": [
-                                                                        { "type": "text", "text": "💵 ยอดแทงรวม:", "size": "sm", "color": "#aaa9aa" },
-                                                                        { "type": "text", "text": `${totalActualBet} บาท`, "size": "sm", "color": "#ffffff", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal",
-                                                                    "contents": [
-                                                                        { "type": "text", "text": `🔒 หักค้ำประกัน (x${maxHandMultiplier}):`, "size": "sm", "color": "#aaa9aa" },
-                                                                        { "type": "text", "text": `${finalHoldCost} บาท`, "size": "sm", "color": "#ff3333", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal",
-                                                                    "contents": [
-                                                                        { "type": "text", "text": "💰 เครดิตคงเหลือ:", "size": "sm", "color": "#aaa9aa" },
-                                                                        { "type": "text", "text": `${user.balance} บาท`, "size": "sm", "color": "#00ff00", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                }
-                                                            ]
-                                                        },
-                                                        { "type": "separator", "color": "#333333" },
-                                                        { "type": "text", "text": limitReasonText, "size": "xs", "color": "#ffaa00", "wrap": true, "align": "center" },
-                                                        { "type": "text", "text": "🔔 ระบบจะคืนเครดิตส่วนต่างให้ตอนสรุปผลครับ", "size": "xxs", "color": "#888888", "align": "center" }
-                                                    ]
-                                                }
-                                            }
-                                        }]
-                                    }, {
-                                        headers: {
-                                            'Content-Type': 'application/json',
-                                            'Authorization': `Bearer ${TOKEN}`
-                                        }
-                                    });
-                                } catch (error) {
-                                    console.error("❌ ส่ง Flex Message โพยแทงล้มเหลว:", error.response ? error.response.data : error.message);
-                                }
-                                return; 
-                            }
-                        } else if (!hasError && totalActualBet === 0) {
-                            replyText = "⚠️ ไม่พบรายการแทงในข้อความของคุณครับ";
-                        }
-
-                        if (hasError && errorMsg !== "") {
-                            replyText = errorMsg;
-                        }
-                    }
-                }
-            }
             // ==================== [ 5. ระบบคืนโพย / ยกเลิกโพยในรอบ ] ====================
             else if (userMsg === "r") {
                 if (!isRoundOpen) {
@@ -1776,253 +1416,92 @@ else if (userMsg === 'oo' || userMsg === 'xx') {
                     }
                 }
             }
-            // ==================== [ 6. ระบบสมาชิกพิมพ์ขอจั่วไพ่ เช่น 12+ ] ====================
-            else if (userMsg.endsWith('+')) {
-                if (!isDrawOpen) {
-                    replyText = "⚠️ ระบบยังไม่ได้เปิดรอบจั่วไพ่ใบที่ 3 หรือ แอดมินปิดรอบจั่วไปแล้วครับ";
-                } else {
-                    const userBetsArray = roundBets[userId];
-                    if (!userBetsArray || userBetsArray.length === 0) {
-                        replyText = "⚠️ คุณยังไม่ได้ส่งโพยเดิมพันในรอบนี้ จึงไม่สามารถขอจั่วไพ่ได้ครับ";
-                    } else {
-                        const legsToDraw = userMsg.replace('+', '').split('');
-                        let drawSuccessLegs = [];
-                        let alreadyDrawnLegs = []; // 📌 [เพิ่มใหม่] เก็บขาที่เคยจั่วไปแล้ว เพื่อนำมาแจ้งเตือน
-
-                        userBetsArray.forEach((bet) => {
-                            // 👑 [จุดแก้ไขบั๊ก] เช็กว่าโพยใบนี้เป็นโพยแทงฝั่งเจ้ามือสู้ขา (จ) หรือเหมาเจ้า (มจ) หรือไม่
-                            const isBettingOnDealer = (bet.betType === "มจ" || bet.betType.startsWith('จ'));
-                            
-                            // 🛑 ถ้าเป็นโพยแทงฝั่งเจ้ามือ ให้ข้ามไปเลย ไม่ทำการเปิดสิทธิ์จั่วเด็ดขาด
-                            if (isBettingOnDealer) return;
-
-                            // 👤 ปรับสถานะเฉพาะโพยฝั่งผู้เล่นปกติเท่านั้น
-                            if (!bet.drawStatus) bet.drawStatus = {};
-
-                            legsToDraw.forEach((leg) => {
-                                let hasThisLeg = false;
-                                if (bet.betType === "มข") {
-                                    hasThisLeg = ['1', '2', '3', '4'].includes(leg);
-                                } else {
-                                    hasThisLeg = bet.betType.includes(leg);
-                                }
-
-                                if (hasThisLeg) {
-                                   // 🚨 [จุดแก้ไขหลัก]: เช็กว่าขานี้เคยจั่วไปแล้วหรือยัง?
-                        if (bet.drawStatus[leg] === "จั่ว") {
-                            // ถ้าเคยจั่วไปแล้ว ให้เก็บบันทึกไว้ว่าส่งซ้ำ (ไม่ใส่ใน drawSuccessLegs)
-                            if (!alreadyDrawnLegs.includes(leg)) {
-                                alreadyDrawnLegs.push(leg);
-                            }
-                        } else {
-                            // 🟢 ถ้ายังไม่เคยจั่ว ให้ปรับสถานะ และบันทึกการจั่วสำเร็จ
-                            bet.drawStatus[leg] = "จั่ว";
-                            if (!drawSuccessLegs.includes(leg)) {
-                                drawSuccessLegs.push(leg);
-                            }
-                        }
-                    }
-                });
-            });
-
-                        if (drawSuccessLegs.length > 0) {
-                            const sortedLegs = drawSuccessLegs.sort((a, b) => a - b).join(', ');
-                            const user = usersWallets[userId] || {};
-
-                            // 💡 ดึงชื่อเล่น (ถ้าน้าไม่ได้ตั้ง nickname ไว้ ระบบจะถอยไปใช้ user.name อัตโนมัติ)
-                            const displayName = user.nickname || user.name || "สมาชิก";
-                            
-                            // 🚀 สั่งยิง Flex Message ดีไซน์ดำ-น้ำเงิน แจ้งขอจั่วไพ่ใบที่ 3 ทันทีตรงนี้
-                            try {
-                                await axios.post('https://api.line.me/v2/bot/message/reply', {
-                                    replyToken: replyToken,
-                                    messages: [{
-                                        "type": "flex",
-                                        "altText": "🃏 ${displayName} บันทึกการขอจั่วไพ่ใบที่ 3 สำเร็จ",
-                                        "contents": {
-                                            "type": "bubble",
-                                            "styles": { "body": { "backgroundColor": "#121620" } },
-                                            "body": {
-                                                "type": "box", "layout": "vertical", "spacing": "md",
-                                                "contents": [
-                                                    { "type": "text", "text": "🃏 ขอจั่วไพ่ใบที่ 3 สำเร็จ 🎉", "weight": "bold", "color": "#3399ff", "size": "md", "align": "center" },
-                                                    { "type": "separator", "color": "#222a3a" },
-                                                    {
-                                                        "type": "box", "layout": "horizontal",
-                                                        "contents": [
-                                                            { "type": "text", "text": "👤 ผู้จั่ว:", "size": "sm", "color": "#8894a6", "flex": 2 },
-                                                            { "type": "text", "text": `[ ${user.memberNumber || '-'} ] ${displayName}`, "size": "sm", "color": "#ffffff", "flex": 5, "weight": "bold" }
-                                                        ]
-                                                    },
-                                                    { "type": "separator", "color": "#222a3a" },
-                                                    {
-                                                        "type": "box", "layout": "vertical", "spacing": "xs",
-                                                        "contents": [
-                                                            { "type": "text", "text": "📍 ขาที่ต้องการจั่วเพิ่ม", "size": "xs", "color": "#3399ff", "weight": "bold" },
-                                                            {
-                                                                "type": "box", "layout": "horizontal", "spacing": "sm", "margin": "sm",
-                                                                "contents": [
-                                                                    { "type": "text", "text": "➡️ ขาผู้เล่น:", "size": "sm", "color": "#aaa9aa", "flex": 3 },
-                                                                    { "type": "text", "text": `[ ขา ${sortedLegs} ]`, "size": "sm", "color": "#00ff00", "weight": "bold", "flex": 5 }
-                                                                ]
-                                                            }
-                                                        ]
-                                                    },
-                                                    { "type": "separator", "color": "#222a3a" },
-                                                    { "type": "text", "text": "📢 สถานะ: รอดำเนินการจั่วไพ่จากแอดมิน", "size": "xs", "color": "#aaaaaa", "align": "center" }
-                                                ]
-                                            }
-                                        }
-                                    }]
-                                }, {
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                        'Authorization': `Bearer ${TOKEN}`
-                                    }
-                                });
-                            } catch (error) {
-                                console.error("❌ ส่ง Flex Message ขอจั่วไพ่ล้มเหลว:", error.response ? error.response.data : error.message);
-                            }
-                            return; // 🌟 ทำงานเสร็จแล้ว ตัดจบตรงนี้เลย
-                            
-                            // 🔴 กรณีที่กดพิมพ์จั่วซ้ำ (ไม่มีขาใหม่ให้จั่วแล้ว)
-                        } else if (alreadyDrawnLegs.length > 0) {
-                const dupLegs = alreadyDrawnLegs.sort((a, b) => a - b).join(', ');
-                replyText = `⚠️ ขา [ ${dupLegs} ] ของคุณได้บันทึกการขอจั่วไปแล้วครับ ไม่สามารถจั่วซ้ำได้!`;
-            
-            // 🟡 กรณีพิมพ์ขาที่ตัวเองไม่ได้แทงไว้
-            } else {
-                replyText = "⚠️ คำสั่งไม่ทำงาน: เนื่องจากคุณไม่ได้ลงเดิมพันในขาที่คุณระบุจั่ว หรือแทงเฉพาะฝั่งเจ้ามือไว้ครับ";
-            }
-        }
-    }
-}
-             // ==================== [ 8. ระบบแอดมินส่งผลสรุปคำนวณแต้ม - เวอร์ชันพ่วง Flex Message ] ====================
+             // ==================== [ 8. ระบบแอดมินส่งผลสรุปคำนวณแต้ม - เวอร์ชันไพ่ 2 ใบ ] ====================
 else if (originalMsg.startsWith('>')) {
     if (!ADMIN_IDS.includes(userId)) {
         replyText = "❌ คุณไม่ใช่แอดมิน ไม่มีสิทธิ์ใช้คำสั่งสรุปผลคะแนนครับ";
     } else if (isRoundOpen) {
-        replyText = "⚠️ ต้องพิมพ์ปิดรอบแทง (X) และทำขั้นตอนจั่วไพ่ให้เสร็จก่อน จึงจะสรุปผลได้ครับ";
+        replyText = "⚠️ ต้องพิมพ์ปิดรอบแทง (X) ก่อน จึงจะสรุปผลได้ครับ";
     } else {
         let textWithoutArrow = originalMsg.substring(1).trim();
         const parts = textWithoutArrow.split(/\s+/); // แยกชิ้นส่วนด้วยเว้นวรรคหรือขึ้นบรรทัดใหม่
         
         if (parts.length < 2) {
-            replyText = "⚠️ รูปแบบผิดครับน้า! ต้องพิมพ์เรียง ขา1 ขา2 ... และตัวสุดท้ายคือเจ้ามือ (คั่นด้วยเว้นวรรค)";
+            replyText = "⚠️ รูปแบบผิดครับ! ต้องพิมพ์เรียง ขา1 ขา2 ... และตัวสุดท้ายคือเจ้ามือ (คั่นด้วยเว้นวรรค)";
             return res.sendStatus(200);
         }
 
-        // 🛠️ ฟังก์ชันแกะรหัสไพ่ (นับสแลชแม่นยำ ไม่โดนตัวอื่นแย่ง)
-        const parseCardStr = (str, isDealer = false, isThreeCards = false, forcePok = false) => {
+        // 🛠️ ฟังก์ชันแกะรหัสไพ่ (เวอร์ชันไพ่ 2 ใบ)
+        const parseCardStr = (str, isDealer = false, forcePok = false) => {
             let clean = str.trim().toLowerCase();
             let isPok = forcePok; 
             let multiplier = 1; 
             let typeName = "แต้มปกติ";
             let rawScore = 0;
 
-            // 🎯 นับเครื่องหมาย / เพื่อคิดเด้งแบบตรงตัว
+            // 🎯 นับเครื่องหมาย / เพื่อคิดเด้ง (1/ = 2 เด้ง, 2/ = 3 เด้ง)
             const slashCount = (clean.match(/\//g) || []).length;
             if (slashCount === 2) { multiplier = 3; }
             else if (slashCount === 1) { multiplier = 2; }
             
-            // ลบเครื่องหมาย / ออกทั้งหมดเพื่อส่องดูแต้มเนื้อๆ
             clean = clean.replace(/\//g, '');
 
-            // เช็กป๊อกเจ้ามือ
+            // เช็กป๊อกเจ้ามือ (*)
             if (isDealer && clean.includes('*')) { isPok = true; clean = clean.replace('*', ''); }
 
-            // แปลงแต้มพิเศษ (รองรับทั้งไทยและอังกฤษ)
-            if (clean === 't' || clean === 'ต') { rawScore = 700; multiplier = 5; typeName = "ตอง"; } 
-            else if (clean === 'sf') { rawScore = 600; multiplier = 5; typeName = "สเตฟฟลัช"; } 
+            // แปลงแต้มพิเศษ / ป๊อก
+            if (clean === 'sf') { rawScore = 600; multiplier = 5; typeName = "สเตฟฟลัช"; } 
             else if (clean === 'h') { rawScore = 500; multiplier = 3; typeName = "เซียน/3เหลือง"; } 
             else if (clean === 's' || clean === 'ร') { rawScore = 400; multiplier = 3; typeName = "เรียง"; } 
             else {
                 let pts = parseInt(clean);
                 if (isNaN(pts)) pts = 0;
                 
-                // สำหรับผู้เล่น ถ้าแต้มเป็น 8 หรือ 9 โดดๆ ให้ถือเป็นไพ่ป๊อกอัตโนมัติ
-                if (isPok) {
-            if (pts === 9) { rawScore = 900; typeName = "ป๊อก 9"; }
-            else if (pts === 8) { rawScore = 800; typeName = "ป๊อก 8"; }
-            else { rawScore = pts; typeName = `${pts} แต้ม`; }
-        } else {
-            rawScore = pts; typeName = `${pts} แต้ม`;
-        }
-    }
-    return { score: rawScore, v: clean, mult: multiplier, name: typeName };
-};
+                if (isPok || pts === 8 || pts === 9) {
+                    if (pts === 9) { rawScore = 900; typeName = "ป๊อก 9"; }
+                    else if (pts === 8) { rawScore = 800; typeName = "ป๊อก 8"; }
+                    else { rawScore = pts; typeName = `${pts} แต้ม`; }
+                } else {
+                    rawScore = pts; typeName = `${pts} แต้ม`;
+                }
+            }
+            return { score: rawScore, v: clean, mult: multiplier, name: typeName };
+        };
 
         // 👑 แกะรหัสเจ้ามือ (ตัวสุดท้าย)
         const dealerRawStr = parts[parts.length - 1]; 
-        const dealerResult = parseCardStr(dealerRawStr, true, false);
+        const dealerResult = parseCardStr(dealerRawStr, true);
 
         let roomResults = {}; 
-        const totalLegsToSend = Math.min(parts.length - 1, 4);
+        const totalLegsToSend = Math.min(parts.length - 1, 6);
 
-        // 🔄 วนลูปแกะรหัสผู้เล่นรายขา
+        // 🔄 วนลูปแกะรหัสผู้เล่นรายขา (2 ใบ)
         for (let i = 0; i < totalLegsToSend; i++) {
             let innerContent = parts[i].trim();
             if (innerContent === "") continue;
 
             let currentLeg = i + 1;
-            let result2Cards = null;
-            let result3Cards = null;
+            let legResult = parseCardStr(innerContent, false);
 
-            // 🔥 [ใช้ระบบ RegEx ชำแหละข้อความขั้นสูง] แยกกลุ่มตัวเลขและเครื่องหมายสแลชออกจากกัน
-           if (innerContent.includes(',')) {
-    // 1. ถ้าแอดมินพิมพ์แบบมีคอมม่าคั่น เช่น 5,sf หรือ 1,s
-    const splitParts = innerContent.split(',');
-    const part1 = splitParts[0].trim();
-    const part2 = splitParts[1].trim();
-    
-    result2Cards = parseCardStr(part1, false, false);
-    result3Cards = parseCardStr(part2, false, true);
-} else {
-    // 2. ถ้าพิมพ์ติดกันแบบปกติ ไม่มีคอมม่า ให้ใช้ RegEx ช่วยผ่าแยก
-    const match = innerContent.match(/^([0-9tshfตร]+(?:\/*))([0-9tshfตร]+(?:\/*))$/i);
-    
-    if (match) {
-        const part1 = match[1]; 
-        const part2 = match[2]; 
-        
-        result2Cards = parseCardStr(part1, false, false);
-        result3Cards = parseCardStr(part2, false, true);
-    } else {
-            // กรณีพิมพ์ตัวเดียวโดดๆ
-                let pts = parseInt(innerContent);
-                if (!isNaN(pts) && (pts === 8 || pts === 9)) {
-                    result2Cards = parseCardStr(innerContent, false, false, true);
-                    result3Cards = parseCardStr(innerContent, false, true, true);
-                } else {
-                    result2Cards = parseCardStr(innerContent, false, false, false);
-                    result3Cards = parseCardStr(innerContent, false, true, false);
-                }
-            }
-           }
             roomResults[currentLeg] = {
                 leg: currentLeg,
-                twoCards: result2Cards,
-                threeCards: result3Cards
+                card: legResult
             };
         }
-
+        
         tempRoomResults = roomResults;
         tempDealerResult = dealerResult;
 
-        // --- 📊 [ส่วนสร้างโครงสร้างข้อมูลจัดระเบียบส่งเข้า Flex Message] ---
+        // --- 📊 [สร้างโครงสร้าง Flex Message สรุปผลไพ่ 2 ใบ] ---
         let legsFlexContents = [];
 
-        for (let leg = 1; leg <= 4; leg++) {
+        for (let leg = 1; leg <= 6; leg++) {
             if (roomResults[leg]) {
                 const res = roomResults[leg];
-                
-                let status2Str = "เสมอ 🟡"; let color2 = "#ffcc00";
-                if (res.twoCards.score > dealerResult.score) { status2Str = "ชนะ 🟢"; color2 = "#00ff66"; }
-                else if (res.twoCards.score < dealerResult.score) { status2Str = "แพ้ 🔴"; color2 = "#ff3333"; }
+                let statusStr = "เสมอ 🟡"; let statusColor = "#ffcc00";
 
-                let status3Str = "เสมอ 🟡"; let color3 = "#ffcc00";
-                if (res.threeCards.score > dealerResult.score) { status3Str = "ชนะ 🟢"; color3 = "#00ff66"; }
-                else if (res.threeCards.score < dealerResult.score) { status3Str = "แพ้ 🔴"; color3 = "#ff3333"; }
+                if (res.card.score > dealerResult.score) { statusStr = "ชนะ 🟢"; statusColor = "#00ff66"; }
+                else if (res.card.score < dealerResult.score) { statusStr = "แพ้ 🔴"; statusColor = "#ff3333"; }
 
                 legsFlexContents.push({
                     "type": "box",
@@ -2035,16 +1514,8 @@ else if (originalMsg.startsWith('>')) {
                             "type": "box",
                             "layout": "horizontal",
                             "contents": [
-                                { "type": "text", "text": `• [2ใบ]: ${res.twoCards.name} (${res.twoCards.mult}เด้ง)`, "size": "xs", "color": "#cccccc" },
-                                { "type": "text", "text": status2Str, "size": "xs", "color": color2, "align": "end", "weight": "bold" }
-                            ]
-                        },
-                        {
-                            "type": "box",
-                            "layout": "horizontal",
-                            "contents": [
-                                { "type": "text", "text": `• [3ใบ]: ${res.threeCards.name} (${res.threeCards.mult}เด้ง)`, "size": "xs", "color": "#cccccc" },
-                                { "type": "text", "text": status3Str, "size": "xs", "color": color3, "align": "end", "weight": "bold" }
+                                { "type": "text", "text": `• ผลไพ่: ${res.card.name} (${res.card.mult}เด้ง)`, "size": "xs", "color": "#cccccc" },
+                                { "type": "text", "text": statusStr, "size": "xs", "color": statusColor, "align": "end", "weight": "bold" }
                             ]
                         },
                         { "type": "separator", "color": "#2a2233", "margin": "xs" }
@@ -2063,7 +1534,6 @@ else if (originalMsg.startsWith('>')) {
             }
         }
 
-        // 🚀 ยิงข้อความแพ็คคู่: รูปภาพหัวข้อผลลัพธ์ + Flex Message สรุปผลคะแนน
         const summaryImgUrl = "https://img2.pic.in.th/-__-----4b1c38e0628ea626.jpg";
 
         try {
@@ -2102,55 +1572,46 @@ else if (originalMsg.startsWith('>')) {
                                     { "type": "text", "text": "📝 ลำดับหน้าไพ่และผลแพ้ชนะแต่ละขา", "size": "xs", "color": "#ffaa00", "weight": "bold" },
                                     { "type": "box", "layout": "vertical", "spacing": "xs", "contents": legsFlexContents },
                                     { "type": "separator", "color": "#2a2233" },
-                                  // 🔘 [เพิ่มใหม่]: ชุดปุ่มกด ยืนยัน (ok) / ยกเลิก (no)
-                            {
-                                "type": "box",
-                                "layout": "horizontal",
-                                "spacing": "sm",
-                                "margin": "md",
-                                "contents": [
                                     {
-                                        "type": "button",
-                                        "style": "primary",
-                                        "color": "#00c853", // สีเขียว
-                                        "height": "sm",
-                                        "action": {
-                                            "type": "message",
-                                            "label": "✅ ยืนยัน",
-                                            "text": "ok" // คำสั่งที่ส่งเข้าแชทเมื่อกดปุ่ม
-                                        }
-                                    },
-                                    {
-                                        "type": "button",
-                                        "style": "primary",
-                                        "color": "#d32f2f", // สีแดง
-                                        "height": "sm",
-                                        "action": {
-                                            "type": "message",
-                                            "label": "❌ ยกเลิก",
-                                            "text": "no" // คำสั่งที่ส่งเข้าแชทเมื่อกดปุ่ม
-                                        }
+                                        "type": "box",
+                                        "layout": "horizontal",
+                                        "spacing": "sm",
+                                        "margin": "md",
+                                        "contents": [
+                                            {
+                                                "type": "button",
+                                                "style": "primary",
+                                                "color": "#00c853",
+                                                "height": "sm",
+                                                "action": { "type": "message", "label": "✅ ยืนยัน", "text": "ok" }
+                                            },
+                                            {
+                                                "type": "button",
+                                                "style": "primary",
+                                                "color": "#d32f2f",
+                                                "height": "sm",
+                                                "action": { "type": "message", "label": "❌ ยกเลิก", "text": "no" }
+                                            }
+                                        ]
                                     }
                                 ]
                             }
-                        ]
+                        }
                     }
+                ]
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TOKEN}`
                 }
-            }
-        ]
-    }, {
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${TOKEN}`
+            });
+        } catch (error) {
+            console.error("❌ ส่งรูปภาพและ Flex ตรวจสอบผลล้มเหลว:", error.response ? error.response.data : error.message);
         }
-    });
-} catch (error) {
-    console.error("❌ ส่งรูปภาพและ Flex ตรวจสอบผลล้มเหลว:", error.response ? error.response.data : error.message);
-}
-return res.sendStatus(200);
+        return res.sendStatus(200);
     }
 }
-  // ==================== [ 9. ระบบแอดมินยืนยันผลคำนวณเงินจริง OK / NO (Settlement Engine) ] ====================
+// ==================== [ 9. ระบบแอดมินยืนยันผลคำนวณเงินจริง OK / NO - เวอร์ชันไพ่ 2 ใบ ] ====================
 else if (userMsg === 'ok' || userMsg === 'no') {
     if (!ADMIN_IDS.includes(userId)) return;
 
@@ -2162,190 +1623,142 @@ else if (userMsg === 'ok' || userMsg === 'no') {
             summaryPayoutText += `👑 เจ้ามือ: ${tempDealerResult.name}\n──────────────────\n`;
             
             let hasAnyBet = false;
-            let flexUserContents = []; // 🎨 อาเรย์สำหรับเก็บดีไซน์กล่องรายคนใน Flex Message
+            let flexUserContents = [];
 
-            // วนลูปสมาชิกทุกคนที่มีการแทงในรอบนี้เพื่อคิดเงิน
             for (let uId in roundBets) {
                 try {
                     const userBetsArray = roundBets[uId];
-                if (!userBetsArray || userBetsArray.length === 0) continue;
-                    
-                const user = usersWallets[uId];
-                // 🚨 [เพิ่มจุดนี้] ป้องกันระบบล่มถ้าหา Wallet สมาชิกไม่เจอ
-                if (!user) {
-                    console.error(`⚠️ ไม่พบข้อมูล usersWallets ของ userId: ${uId}`);
-                    continue; // ให้ข้ามไปคิดเงินคนถัดไป ไม่ให้ลูปค้าง/ดับ
-                }
-
-                // 💡 ดึงชื่อเล่น (ถ้าน้าไม่ได้ตั้ง nickname ไว้ ระบบจะถอยไปใช้ user.name อัตโนมัติ)
-                const displayName = user.nickname || user.name || "สมาชิก";
-                    
-                hasAnyBet = true;
-                let userTotalWinLoss = 0; 
-                let totalHoldRefund = 0;   
-                let totalBetAmountThisRound = 0; // 📊 ตัวแปรเพิ่มใหม่สำหรับเก็บยอดแทงรวมแท้จริงในตานี้เพื่อเอาไปคิดเทิร์น
-
-                userBetsArray.forEach((bet) => {
-                    totalHoldRefund += bet.holdCost; // ดึงเงินค้ำประกัน 3 เท่ากลับมาคืนก่อน
-
-                    // แกะข้อมูลตามประเภทโพย (เช่น "1", "มข", "จ12")
-                    let legsToCalculate = [];
-                    if (bet.betType === "มข" || bet.betType === "มจ") {
-                        legsToCalculate = ['1', '2', '3', '4'];
-                    } else if (bet.betType.startsWith('จ')) {
-                        legsToCalculate = bet.betType.substring(1).split('');
-                    } else {
-                        legsToCalculate = bet.betType.split('');
+                    if (!userBetsArray || userBetsArray.length === 0) continue;
+                        
+                    const user = usersWallets[uId];
+                    if (!user) {
+                        console.error(`⚠️ ไม่พบข้อมูล usersWallets ของ userId: ${uId}`);
+                        continue;
                     }
 
-                    // 🧮 สะสมยอดเดิมพันรวมจากราคารายขาคูณจำนวนขาที่เปิดสู้จริงในตานี้
-                    totalBetAmountThisRound += (bet.pricePerLeg * legsToCalculate.length);
+                    const displayName = user.nickname || user.name || "สมาชิก";
+                    hasAnyBet = true;
+                    let userTotalWinLoss = 0; 
+                    let totalHoldRefund = 0;   
+                    let totalBetAmountThisRound = 0;
 
-                    // คำนวณเงินแยกตามรายขาในโพยใบนี้
-                    legsToCalculate.forEach((leg) => {
-                        const legNum = parseInt(leg);
-                        const matchResult = tempRoomResults[legNum];
-                        if (!matchResult) return; // ป้องกันกรณีขาไม่มีข้อมูลผล
-                        
-                        // 🔍 ตรวจสอบประเภทโพย: เป็นการแทงฝั่งเจ้ามือสู้ขาผู้เล่นใช่หรือไม่
-                        const isBettingOnDealer = (bet.betType === "มจ" || bet.betType.startsWith('จ'));
+                    userBetsArray.forEach((bet) => {
+                        totalHoldRefund += bet.holdCost;
 
-                        let finalCard;
-                        const betPrice = bet.pricePerLeg; // ยอดแทงต่อ 1 ขา
-
-                        if (!isBettingOnDealer) {
-                            // 👤 [ฝั่งคนแทงผู้เล่นปกติ] -> รันระบบเดิมของคุณที่สมบูรณ์แบบอยู่แล้ว 100%
-                            const isUserDrawn = (bet.drawStatus && bet.drawStatus[leg] === "จั่ว");
-                            finalCard = isUserDrawn ? matchResult.threeCards : matchResult.twoCards;
-                            // 🟢 ฝั่งผู้เล่นชนะ:
-                            if (finalCard.score > tempDealerResult.score) {
-                                let winMultiplier = finalCard.mult;
-                                // 🛡️ ถ้าค้ำประกันมาแค่ 2 เด้ง ชนะเท่าไหร่ก็โดนแคปให้ได้ไม่เกิน 2 เด้ง (ถ้าค้ำครบ 3 เด้งจะปล่อยได้เต็ม 5 เด้ง)
-                                if (bet.maxMultiplier && bet.maxMultiplier < 3 && winMultiplier > bet.maxMultiplier) {
-                                    winMultiplier = bet.maxMultiplier;
-                                }
-                                userTotalWinLoss += (betPrice * winMultiplier);
-                            } 
-                            // 🔴 ฝั่งผู้เล่นแพ้:
-                            else if (finalCard.score < tempDealerResult.score) {
-                                let loseMultiplier = tempDealerResult.mult;
-                                // ล็อกเพดานแพ้สูงสุดไม่เกิน 3 เด้งสำหรับคนค้ำครบ
-                                if (loseMultiplier > 3) {
-                                loseMultiplier = 3;
-                                }
-                                // 🛡️ ถ้าค้ำประกันมาน้อยกว่า (เช่น 2 เด้ง) ก็หักแพ้ตามเพดานค้ำจริง (ไม่เกิน 2)
-                                if (bet.maxMultiplier && loseMultiplier > bet.maxMultiplier) {
-                                    loseMultiplier = bet.maxMultiplier;
-                                }
-                                userTotalWinLoss -= (betPrice * loseMultiplier);
-                            }
+                        let legsToCalculate = [];
+                        if (bet.betType === "รข" || bet.betType === "รจ") {
+                            legsToCalculate = ['1', '2', '3', '4', '5', '6'];
+                        } else if (bet.betType.startsWith('จ')) {
+                            legsToCalculate = bet.betType.substring(1).split('');
+                        } else {
+                            legsToCalculate = bet.betType.split('');
                         }
-                        else {
-                            // 👑 [ฝั่งคนแทงเจ้ามือ (จ หรือ มจ)] -> ใช้กฎตายตัวแยกคำนวณเด็ดขาด
-                            let playerTwoCardScore = matchResult.twoCards.score;
-                            let playerTwoCardMult = matchResult.twoCards.mult;
 
-                            // รันกฎตายตัว: ขาผู้เล่นได้ 4 แต้มหรือต่ำกว่า (และไม่ใช่ 4 แต้มเด้ง) ให้เจ้ามือไปสู้กับผล 3 ใบ
-                            if (playerTwoCardScore <= 4 || (playerTwoCardScore === 4 && playerTwoCardMult === 1)) {
-                                finalCard = matchResult.threeCards; // ชนกับผลไพ่ 3 ใบ
+                        totalBetAmountThisRound += (bet.pricePerLeg * legsToCalculate.length);
+
+                        legsToCalculate.forEach((leg) => {
+                            const legNum = parseInt(leg);
+                            const matchResult = tempRoomResults[legNum];
+                            if (!matchResult) return;
+                            
+                            const isBettingOnDealer = (bet.betType === "รจ" || bet.betType.startsWith('จ'));
+                            const betPrice = bet.pricePerLeg;
+                            const finalCard = matchResult.card; // ใช้ผลไพ่ 2 ใบโดยตรง
+
+                            if (!isBettingOnDealer) {
+                                // 👤 [ฝั่งคนแทงผู้เล่น]
+                                if (finalCard.score > tempDealerResult.score) {
+                                    let winMultiplier = finalCard.mult;
+                                    if (bet.maxMultiplier && bet.maxMultiplier < 3 && winMultiplier > bet.maxMultiplier) {
+                                        winMultiplier = bet.maxMultiplier;
+                                    }
+                                    userTotalWinLoss += (betPrice * winMultiplier);
+                                } else if (finalCard.score < tempDealerResult.score) {
+                                    let loseMultiplier = tempDealerResult.mult;
+                                    if (loseMultiplier > 3) loseMultiplier = 3;
+                                    if (bet.maxMultiplier && loseMultiplier > bet.maxMultiplier) {
+                                        loseMultiplier = bet.maxMultiplier;
+                                    }
+                                    userTotalWinLoss -= (betPrice * loseMultiplier);
+                                }
                             } else {
-                                finalCard = matchResult.twoCards;   // ชนกับผลไพ่ 2 ใบ (5 แต้มขึ้นไป หรือ 4 แต้มเด้ง)
-                            }
-
-                            // 🧮 ตรรกะคิดเงินของฝั่งคนแทงเจ้ามือ (หักต๋ง 10% เฉพาะขาที่ได้กำไร)
-                            if (tempDealerResult.score > finalCard.score) {
-                                let winMultiplier = tempDealerResult.mult; // ไม่ต้องเอา bet.maxMultiplier มาล็อคแล้ว                              
-                                if (tempDealerResult.rawMult) {
-                                    winMultiplier = tempDealerResult.rawMult;
+                                // 👑 [ฝั่งคนแทงเจ้ามือ]
+                                if (tempDealerResult.score > finalCard.score) {
+                                    let winMultiplier = tempDealerResult.mult;
+                                    if (tempDealerResult.rawMult) winMultiplier = tempDealerResult.rawMult;
+                                    if (bet.maxMultiplier && bet.maxMultiplier < 3 && winMultiplier > bet.maxMultiplier) {
+                                        winMultiplier = bet.maxMultiplier;
+                                    }
+                                    
+                                    let grossWin = betPrice * winMultiplier;
+                                    let netWin = Math.floor(grossWin * 0.9); // หักต๋ง 10%
+                                    userTotalWinLoss += netWin;
+                                } else if (tempDealerResult.score < finalCard.score) {
+                                    let loseMultiplier = finalCard.mult;
+                                    if (loseMultiplier > 3) loseMultiplier = 3;
+                                    if (bet.maxMultiplier && loseMultiplier > bet.maxMultiplier) {
+                                        loseMultiplier = bet.maxMultiplier;
+                                    }
+                                    userTotalWinLoss -= (betPrice * loseMultiplier);
                                 }
-                                // 🛡️ ถ้าค้ำประกันมาแค่ 2 เด้ง ชนะเท่าไหร่ก็โดนแคปไม่เกิน 2 เด้ง (ถ้าค้ำครบ 3 เด้งปล่อยได้เต็ม)
-                                if (bet.maxMultiplier && bet.maxMultiplier < 3 && winMultiplier > bet.maxMultiplier) {
-                                    winMultiplier = bet.maxMultiplier;
-                                 }
-                                
-                                let grossWin = betPrice * winMultiplier; // กำไรเต็มก่อนหัก
-                                
-                                // 🔥 หักต๋งรายขาทันที 10% (เหลือจ่ายจริง 90%)
-                                let netWin = Math.floor(grossWin * 0.9);
-                                userTotalWinLoss += netWin;
-                            } 
-                           // 🔴 ฝั่งคนแทงเจ้ามือแพ้:
-                        else if (tempDealerResult.score < finalCard.score) {
-                            let loseMultiplier = finalCard.mult;
-                            // ล็อกเพดานแพ้สูงสุดไม่เกิน 3 เด้งสำหรับคนค้ำครบ
-                            if (loseMultiplier > 3) {
-                            loseMultiplier = 3;
                             }
-                            // 🛡️ ถ้าค้ำประกันมาน้อยกว่า (เช่น 2 เด้ง) หักแพ้ไม่เกินเพดานค้ำจริง
-                            if (bet.maxMultiplier && loseMultiplier > bet.maxMultiplier) {
-                            loseMultiplier = bet.maxMultiplier;
-                            }
-                            userTotalWinLoss -= (betPrice * loseMultiplier);
-                            }
-                        }
+                        });
                     });
-                }); // ปิด userBetsArray.forEach
 
-                // 🧮 อัปเดตกระเป๋าเงินจริงหลังคิดยอดสุทธิ
-                user.balance = user.balance + totalHoldRefund + userTotalWinLoss;
+                    // อัปเดตยอดเงิน
+                    user.balance = user.balance + totalHoldRefund + userTotalWinLoss;
 
-                // 📊 [ระบบคำนวณและหักยอดเทิร์นอัตโนมัติ - เวอร์ชันสากลหักตามยอดแทงจริงที่มีผลได้เสีย]
-                if (user.turnoverTarget > 0 && userTotalWinLoss !== 0) {
-                    let currentTurnoverMade = totalBetAmountThisRound; // หักลดลงเท่ากับยอดแทงจริง ไม่สนจำนวนเด้ง
-                    user.turnoverTarget -= currentTurnoverMade;
-                    if (user.turnoverTarget < 0) user.turnoverTarget = 0; 
-                }
+                    // หัก turnover
+                    if (user.turnoverTarget > 0 && userTotalWinLoss !== 0) {
+                        user.turnoverTarget -= totalBetAmountThisRound;
+                        if (user.turnoverTarget < 0) user.turnoverTarget = 0; 
+                    }
 
-                let sign = userTotalWinLoss > 0 ? "+" : "";
-                let displayColor = userTotalWinLoss > 0 ? "#00ff66" : (userTotalWinLoss < 0 ? "#ff3333" : "#ffcc00");
-                
-                let isUserBettingOnDealer = userBetsArray.some(b => b.betType === "มจ" || b.betType.startsWith('จ'));
-                let feeNote = (isUserBettingOnDealer && userTotalWinLoss !== 0) ? " (หักต๋งแล้ว)" : "";
+                    let sign = userTotalWinLoss > 0 ? "+" : "";
+                    let displayColor = userTotalWinLoss > 0 ? "#00ff66" : (userTotalWinLoss < 0 ? "#ff3333" : "#ffcc00");
+                    let isUserBettingOnDealer = userBetsArray.some(b => b.betType === "รจ" || b.betType.startsWith('จ'));
+                    let feeNote = (isUserBettingOnDealer && userTotalWinLoss !== 0) ? " (หักต๋งแล้ว)" : "";
 
-                // 🛠️ ประกอบร่างดีไซน์ Flex รายบุคคล
-                flexUserContents.push({
-                    "type": "box",
-                    "layout": "vertical",
-                    "margin": "md",
-                    "spacing": "xs",
-                    "contents": [
-                        { "type": "text", "text": `👤 [ ${user.memberNumber || '-'} ] ${displayName}`, "weight": "bold", "color": "#ffffff", "size": "sm" },
-                        {
-                            "type": "box",
-                            "layout": "horizontal",
-                            "contents": [
-                                { "type": "text", "text": `• ยอดสุทธิ:${feeNote}`, "size": "xs", "color": "#cccccc" },
-                                { "type": "text", "text": `${sign}${userTotalWinLoss} บาท`, "size": "xs", "color": displayColor, "align": "end", "weight": "bold" }
-                            ]
-                        },
-                        {
-                            "type": "box",
-                            "layout": "horizontal",
-                            "contents": [
-                                { "type": "text", "text": `• เครดิตคงเหลือ:`, "size": "xs", "color": "#cccccc" },
-                                { "type": "text", "text": `${user.balance} บ.`, "size": "xs", "color": "#ffffff", "align": "end" }
-                            ]
-                        },
-                        { "type": "separator", "color": "#2a2233", "margin": "xs" }
-                    ]
-                });
+                    flexUserContents.push({
+                        "type": "box",
+                        "layout": "vertical",
+                        "margin": "md",
+                        "spacing": "xs",
+                        "contents": [
+                            { "type": "text", "text": `👤 [ ${user.memberNumber || '-'} ] ${displayName}`, "weight": "bold", "color": "#ffffff", "size": "sm" },
+                            {
+                                "type": "box",
+                                "layout": "horizontal",
+                                "contents": [
+                                    { "type": "text", "text": `• ยอดสุทธิ:${feeNote}`, "size": "xs", "color": "#cccccc" },
+                                    { "type": "text", "text": `${sign}${userTotalWinLoss} บาท`, "size": "xs", "color": displayColor, "align": "end", "weight": "bold" }
+                                ]
+                            },
+                            {
+                                "type": "box",
+                                "layout": "horizontal",
+                                "contents": [
+                                    { "type": "text", "text": `• เครดิตคงเหลือ:`, "size": "xs", "color": "#cccccc" },
+                                    { "type": "text", "text": `${user.balance} บ.`, "size": "xs", "color": "#ffffff", "align": "end" }
+                                ]
+                            },
+                            { "type": "separator", "color": "#2a2233", "margin": "xs" }
+                        ]
+                    });
 
-                // เก็บลงตัวแปร text ระบบเดิมด้วยเพื่อไม่ให้ระบบหลังบ้านรวน
-                let oldSign = userTotalWinLoss > 0 ? "🟢 +" : (userTotalWinLoss < 0 ? "🔴 " : "🟡 ");
-                let oldFeeNote = (isUserBettingOnDealer && userTotalWinLoss !== 0) ? " \n(หักต๋งขาเจ้ามือที่ชนะแล้ว)" : "";
-                summaryPayoutText += `👤 [ ${user.memberNumber || '-'} ] ${displayName}\n  ยอดสุทธิ: ${oldSign}${userTotalWinLoss} บาท${oldFeeNote}\n เครดิตคงเหลือ: ${user.balance} บ.\n──────────────────\n`;
-            } catch (error) {
-                 // 🛡️ หากเกิด Error กับคนไหน ให้พ่น Log บอก แล้วไปคิดเงินคนถัดไปทันที ลูปไม่ดับแน่นอน
-                 console.error(`❌ เกิดข้อผิดพลาดในการคิดเงินของ uId ${uId}:`, error);
-            }    
-        } // ปิดลูป for (let uId in roundBets)
+                    let oldSign = userTotalWinLoss > 0 ? "🟢 +" : (userTotalWinLoss < 0 ? "🔴 " : "🟡 ");
+                    let oldFeeNote = (isUserBettingOnDealer && userTotalWinLoss !== 0) ? " \n(หักต๋งขาเจ้ามือที่ชนะแล้ว)" : "";
+                    summaryPayoutText += `👤 [ ${user.memberNumber || '-'} ] ${displayName}\n  ยอดสุทธิ: ${oldSign}${userTotalWinLoss} บาท${oldFeeNote}\n เครดิตคงเหลือ: ${user.balance} บ.\n──────────────────\n`;
+                } catch (error) {
+                    console.error(`❌ เกิดข้อผิดพลาดในการคิดเงินของ uId ${uId}:`, error);
+                }    
+            }
 
-            // 🛡️ เซฟลง Firebase แบบปลอดภัย หาก DB กระตุก บอทจะไม่ค้างและยังส่ง Flex สรุปยอดได้ปกติ
-        try {
-            await saveDataToFirebase();
-        } catch (dbError) {
-            console.error("❌ เกิดข้อผิดพลาดขณะเซฟลง Firebase:", dbError);
-        }
+            try {
+                await saveDataToFirebase();
+            } catch (dbError) {
+                console.error("❌ เกิดข้อผิดพลาดขณะเซฟลง Firebase:", dbError);
+            }
 
             if (!hasAnyBet) {
                 summaryPayoutText += "📝 รอบนี้ไม่มีสมาชิกส่งโพยเดิมพันเข้ามาครับ\n";
@@ -2361,7 +1774,7 @@ else if (userMsg === 'ok' || userMsg === 'no') {
 
             summaryPayoutText += `✨ ระบบได้ทำการคำนวณเงินและอัปเดตกระเป๋าเงินให้ทุกคนเรียบร้อยแล้วครับ 🏁`;
             
-            // 📊 [ระบบบันทึกสถิติแบบละเอียดแยกขา - เวอร์ชันโชว์ไพ่ 2 ใบ และ 3 ใบ] 
+            // 📊 [สถิติประวัติรอบการเล่น - เวอร์ชันไพ่ 2 ใบ]
             let dealerDisplay = ""; 
             if (tempDealerResult.name.includes("ป๊อก 9")) dealerDisplay = "9ป";
             else if (tempDealerResult.name.includes("ป๊อก 8")) dealerDisplay = "8ป";
@@ -2377,25 +1790,16 @@ else if (userMsg === 'ok' || userMsg === 'no') {
             for (let leg = 1; leg <= 6; leg++) {
                 if (tempRoomResults[leg]) {
                     const legRes = tempRoomResults[leg];
+                    let dotCard = "🟡";
+                    if (tempDealerResult.score > legRes.card.score) dotCard = "🔴";
+                    else if (tempDealerResult.score < legRes.card.score) dotCard = "🟢";
 
-                    // 1. เช็กไพ่ 2 ใบ ชนกับเจ้ามือ (ชนะ=🟢, แพ้=🔴, เสมอ=🟡)
-                    let dotCard2 = "🟡";
-                    if (tempDealerResult.score > legRes.twoCards.score) dotCard2 = "🔴";
-                    else if (tempDealerResult.score < legRes.twoCards.score) dotCard2 = "🟢";
-
-                    // 2. เช็กไพ่ 3 ใบ ชนกับเจ้ามือ (ชนะ=🟢, แพ้=🔴, เสมอ=🟡)
-                    let dotCard3 = "🟡";
-                    if (tempDealerResult.score > legRes.threeCards.score) dotCard3 = "🔴";
-                    else if (tempDealerResult.score < legRes.threeCards.score) dotCard3 = "🟢";
-
-                    roomRows.push(`[${leg}${dotCard2}ll${dotCard3}]`);
+                    roomRows.push(`[${leg}${dotCard}]`);
                 } else {
-                    // หากห้องนั้นไม่มีข้อมูล ให้ถือว่าแพ้ทั้งคู่ (🔴)
-                    roomRows.push(`[${leg}🔴I🔴]`);
+                    roomRows.push(`[${leg}🔴]`);
                 }
             }
 
-            // จัดหน้าแบ่งเป็น 2 แถว แถวละ 3 ห้องตามสไตล์ที่น้าต้องการ
             historySummary += `${roomRows[0]} ${roomRows[1]} ${roomRows[2]}\n${roomRows[3]} ${roomRows[4]} ${roomRows[5]}`;
             
             matchHistory.push(historySummary);
@@ -2407,84 +1811,66 @@ else if (userMsg === 'ok' || userMsg === 'no') {
                 bets: JSON.parse(JSON.stringify(roundBets))
             };
             
-           // ==================== [ส่วนแปลงเป็น CAROUSEL สไลด์ข้าง] ====================
-// 1. ตัดแบ่ง flexUserContents ออกเป็นหน้าๆ (แนะนำหน้าละ 3 คนเพื่อให้เห็นยอดคงเหลือชัดเจน)
-const chunkSize = 7; 
-const userPages = [];
-for (let i = 0; i < flexUserContents.length; i += chunkSize) {
-    userPages.push(flexUserContents.slice(i, i + chunkSize));
-}
+            // Carousel Flex
+            const chunkSize = 7; 
+            const userPages = [];
+            for (let i = 0; i < flexUserContents.length; i += chunkSize) {
+                userPages.push(flexUserContents.slice(i, i + chunkSize));
+            }
 
-// ป้องกันกรณีไม่มีผู้เล่นในรอบ
-if (userPages.length === 0) {
-    userPages.push([{ "type": "text", "text": "ไม่มีรายการคำนวณในรอบนี้", "color": "#aaaaaa", "size": "xs", "align": "center" }]);
-}
+            if (userPages.length === 0) {
+                userPages.push([{ "type": "text", "text": "ไม่มีรายการคำนวณในรอบนี้", "color": "#aaaaaa", "size": "xs", "align": "center" }]);
+            }
 
-// 2. สร้างการ์ด Carousel
-const winLossBubbles = userPages.map((pageContents, index) => {
-    const isLastPage = index === userPages.length - 1;
-
-    return {
-        "type": "bubble",
-        "styles": {
-            "body": { "backgroundColor": "#191424" } // 🎨 ใช้สีม่วงดำสำหรับสรุปผล
-        },
-        "body": {
-            "type": "box",
-            "layout": "vertical",
-            "spacing": "md",
-            "contents": [
-                { "type": "text", "text": "💰 สรุปยอดได้/เสีย ประจำรอบ 🎉", "weight": "bold", "color": "#ffaa00", "size": "md", "align": "center" },
-                { "type": "text", "text": `รอบที่: ${currentRound} (หน้า ${index + 1}/${userPages.length})`, "weight": "bold", "color": "#ffffff", "size": "xl", "align": "center", "margin": "none" },
-                { "type": "text", "text": `👑 เจ้ามือ: ${tempDealerResult.name}`, "size": "xs", "color": "#aaaaaa", "align": "center" },
-                { "type": "separator", "color": "#2a2a35" },
-                
-                // 👤 รายชื่อสมาชิก
-                {
-                    "type": "box",
-                    "layout": "vertical",
-                    "spacing": "sm",
-                    "contents": pageContents
-                },
-                
-                { "type": "separator", "color": "#2a2a35" },
-                { "type": "text", "text": "✅ ระบบทำการเคลียร์ยอดเงินในรอบนี้เสร็จสิ้นแล้วครับ!", "size": "xs", "color": "#00ff66", "align": "center", "weight": "bold" },
-                
-                // 🔘 ถ้าเป็นหน้าสุดท้าย ให้แสดงปุ่มกดเปิดรอบถัดไปได้ทันที
-                ...(isLastPage ? [
-                    {
-                        "type": "button",
-                        "style": "primary",
-                        "color": "#ffaa00",
-                        "height": "sm",
-                        "margin": "md",
-                        "action": {
-                            "type": "message",
-                            "label": "🚀 เปิดรอบแทงถัดไป",
-                            "text": "o" // 👈 เปลี่ยนเป็นคำสั่งเปิดรอบของน้าได้เลยครับ
-                        }
+            const winLossBubbles = userPages.map((pageContents, index) => {
+                const isLastPage = index === userPages.length - 1;
+                return {
+                    "type": "bubble",
+                    "styles": { "body": { "backgroundColor": "#191424" } },
+                    "body": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "spacing": "md",
+                        "contents": [
+                            { "type": "text", "text": "💰 สรุปยอดได้/เสีย ประจำรอบ 🎉", "weight": "bold", "color": "#ffaa00", "size": "md", "align": "center" },
+                            { "type": "text", "text": `รอบที่: ${currentRound} (หน้า ${index + 1}/${userPages.length})`, "weight": "bold", "color": "#ffffff", "size": "xl", "align": "center", "margin": "none" },
+                            { "type": "text", "text": `👑 เจ้ามือ: ${tempDealerResult.name}`, "size": "xs", "color": "#aaaaaa", "align": "center" },
+                            { "type": "separator", "color": "#2a2a35" },
+                            {
+                                "type": "box",
+                                "layout": "vertical",
+                                "spacing": "sm",
+                                "contents": pageContents
+                            },
+                            { "type": "separator", "color": "#2a2a35" },
+                            { "type": "text", "text": "✅ ระบบทำการเคลียร์ยอดเงินในรอบนี้เสร็จสิ้นแล้วครับ!", "size": "xs", "color": "#00ff66", "align": "center", "weight": "bold" },
+                            ...(isLastPage ? [
+                                {
+                                    "type": "button",
+                                    "style": "primary",
+                                    "color": "#ffaa00",
+                                    "height": "sm",
+                                    "margin": "md",
+                                    "action": { "type": "message", "label": "🚀 เปิดรอบแทงถัดไป", "text": "o" }
+                                }
+                            ] : [])
+                        ]
                     }
-                ] : [])
-            ]
-        }
-    };
-});
+                };
+            });
 
-// 3. กำหนดค่า Carousel Flex
-global.currentReplyFlex = {
-    "type": "flex",
-    "altText": `💰 สรุปยอดได้/เสีย รอบที่: ${currentRound}`,
-    "contents": {
-        "type": "carousel",
-        "contents": winLossBubbles
-    }
-};
-// =========================================================================
-            // กำหนดให้ส่งทั้งข้อความธรรมดา (เก็บประวัติ) และแนบกล่องดีไซน์ไปด้วยครับน้า
+            global.currentReplyFlex = {
+                "type": "flex",
+                "altText": `💰 สรุปยอดได้/เสีย รอบที่: ${currentRound}`,
+                "contents": {
+                    "type": "carousel",
+                    "contents": winLossBubbles
+                }
+            };
+
             tempRoomResults = null;
             tempDealerResult = null;
             roundBets = {};
-            
             replyText = ""; 
         }     
         else if (userMsg === 'no') {
@@ -2492,9 +1878,8 @@ global.currentReplyFlex = {
             tempRoomResults = null;
             tempDealerResult = null;
         }
-    } // ปิดตัว else ของเงื่อนไขตรวจเช็กแต้มค้างคัดกรองหลัก
+    }
 }
-
 // ==================== [ 10. ระบบคู่มือ: คำสั่งสมาชิก (คส), กติกา (กต) และ บัญชี (บช) ] ====================
 else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' || userMsg === '/บช') {
     if (userMsg === 'คส') {
@@ -2502,8 +1887,8 @@ else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' ||
                     `🔹 **C** ➡️ เช็กเลขสมาชิก ยอดเครดิต และสลิปโพยค้าง + เลขบัญชี\n` +
                     `🔹 **บช** ➡️ ดูเลขบัญชีธนาคารสำหรับเติมเงิน\n` +
                     `🔹 **[เลขขา]-[จำนวนเงิน]** ➡️ ส่งโพยเดิมพัน (เช่น 123-100)\n` +
-                    `🔹 **มข-[จำนวนเงิน]** ➡️ แทงเหมาหมดทุกขา ขาละเท่าๆ กัน\n` +
-                    `🔹 **มจ-[จำนวนเงิน]** ➡️ แทงเจ้ามือชนผู้เล่นทุกขา ขาละเท่าๆ กัน\n` +
+                    `🔹 **รข-[จำนวนเงิน]** ➡️ แทงเหมาหมดทุกขา ขาละเท่าๆ กัน\n` +
+                    `🔹 **รจ-[จำนวนเงิน]** ➡️ แทงเจ้ามือชนผู้เล่นทุกขา ขาละเท่าๆ กัน\n` +
                     `🔹 **R** ➡️ ขอดึงโพยคืน/ยกเลิกโพยทั้งหมดในรอบนั้น (ตอนเปิดแทง)\n` +
                     `🔹 **[เลขขา]+** ➡️ ขอจั่วไพ่ใบที่ 3 เพิ่มเติม (เฉพาะขาผู้เล่นปกติ)\n\n` +
                     `💡 *หมายเหตุ: ทุกคำสั่งสามารถพิมพ์ได้ทั้งตัวพิมพ์เล็กและตัวพิมพ์ใหญ่ครับ*`;
@@ -2513,12 +1898,7 @@ else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' ||
     }
     else if (userMsg === 'บช' || userMsg === '/บช') {
         // 🏦 บล็อกข้อความตอบกลับเรื่องบัญชีธนาคารโดยเฉพาะ
-        replyText = `🏦 **[ ช่องทางการโอนเงินเติมเครดิต ]** 🏦\n\n` +
-                    `🔹 **ธนาคาร:** กสิกรไทย (KBank)\n` +
-                    `🔹 **เลขบัญชี:** 037-1556-125\n` +
-                    `🔹 **ชื่อบัญชี:** นาย ภาณุวัฒก์ ก้องกุล\n\n` +
-                    `⚠️ **ข้อควรระวัง:**\n` +
-                    `เมื่อโอนเงินเสร็จแล้ว กรุณาส่งสลิปหลักฐานเข้ามาในแชทนี้ เพื่อให้แอดมินเติมยอดเครดิตให้ครับ 🎉`;
+        replyText = `🏦 [ กรุณา พิม ฝากจำนวนเงิน ] 🏦`;
     }
 }
                 // ==================== [ ระบบดึงโพยและผลไพ่ย้อนหลังรายบุคคล (vรอบ,mสมาชิก) ] ====================
@@ -2531,7 +1911,7 @@ else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' ||
                 if (isNaN(roundTarget) || isNaN(memberTarget)) {
                     replyText = "⚠️ รูปแบบคำสั่งไม่ถูกต้องครับน้า\nกรุณาพิมพ์ เช่น v12,m5 (เพื่อดูรอบที่ 12 ของสมาชิกคนที่ 5)";
                 } else if (!pastRoundsData[roundTarget]) {
-                    replyText = `❌ ไม่พบข้อมูลการเล่นของ "รอบที่ ${roundTarget}" ในระบบครับ (อาจจะเป็นรอบเก่าก่อนระบบเปิด หรือเซิร์ฟเวอร์เพิ่งรีสตาร์ท)`;
+                    replyText = `❌ ไม่พบข้อมูลการเล่นของ "รอบที่ ${roundTarget}" ในระบบครับ\n(อาจจะเป็นรอบเก่าก่อนระบบเปิด หรือเซิร์ฟเวอร์เพิ่งรีสตาร์ท)`;
                 } else {
                     const historicalRound = pastRoundsData[roundTarget];
                     const historicalDealer = historicalRound.dealer;
@@ -2583,7 +1963,7 @@ else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' ||
                         // 3. เจาะลึกวิเคราะห์โพยและคิดเงินย้อนหลังเพื่อโชว์หลักฐานมัดตัว
                         userBets.forEach((bet) => {
                             let legsToCalc = [];
-                            if (bet.betType === "มข" || bet.betType === "มจ") {
+                            if (bet.betType === "รข" || bet.betType === "รจ") {
                                 legsToCalc = ['1', '2', '3', '4', '5', '6'];
                             } else if (bet.betType.startsWith('จ')) {
                                 legsToCalc = bet.betType.substring(1).split('');
@@ -2610,7 +1990,7 @@ else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' ||
                                 const matchResult = historicalRooms[legNum];
                                 if (!matchResult) return;
 
-                                const isBettingOnDealer = (bet.betType === "มจ" || bet.betType.startsWith('จ'));
+                                const isBettingOnDealer = (bet.betType === "รจ" || bet.betType.startsWith('จ'));
                                 let finalCard;
                                 let statusAction = "[อยู่]";
 
@@ -3061,52 +2441,39 @@ else if (command.toLowerCase() === "y") {
                     }
                 }
             }
-        // ==================== [ 7. ระบบลงทะเบียน / เช็กบัตรสมาชิก (กรณีทั่วไป) ] ====================
+         // ==================== [ 7. ระบบลงทะเบียน / เช็กบัตรสมาชิก ] ====================
             else {
                 const isRegistered = usersWallets[userId] ? true : false;
 
                 if (!isRegistered) {
                     if (originalMsg.startsWith('C/') || originalMsg.startsWith('c/')) {
-                        const registerData = originalMsg.substring(2).trim();
-                        
-                        // ตัดแบ่งข้อความด้วยเครื่องหมายจุลภาค ( / ) เพื่อแยก ชื่อ/ ธนาคาร/ เลขบัญชี
-                        const dataParts = registerData.split(/\n|\//);
-                        const fullName = dataParts[0] ? dataParts[0].trim() : "";
-                        const nickname = dataParts[1] ? dataParts[1].trim() : "";
-                        const bankName = dataParts[2] ? dataParts[2].trim() : "";
-                        const bankAccount = dataParts[3] ? dataParts[3].trim() : "";
+                        const registerCode = originalMsg.substring(2).trim(); // ดึงเฉพาะตัวเลขหลัง c/
+                        const pendingCodeKey = `c_${registerCode}`; // แปลงเป็น c_748100
 
-                        // 🚨 [เช็กความครบถ้วน] ถ้าขาดสิ่งใดสิ่งหนึ่งไป หรือลืมใส่เครื่องหมายจุลภาค บอทจะไม่ให้ผ่าน!
-                        if (fullName === "" || nickname === "" || bankName === "" || bankAccount === "") {
-                            try {
+                        try {
+                            // 🔍 ดึงข้อมูลจาก Firebase โดยใช้ axios (REST API)
+                            const resData = await axios.get(`${FIREBASE_URL}pending_verify/${pendingCodeKey}.json`);
+                            const webData = resData.data;
+
+                            // ❌ กรณีที่ไม่พบรหัสโค้ดใน Firebase (webData เป็น null)
+                            if (!webData) {
                                 await axios.post('https://api.line.me/v2/bot/message/reply', {
                                     replyToken: replyToken,
-                                    messages: [
-                                        {
-                                            "type": "flex",
-                                            "altText": "⚠️ สมัครสมาชิกไม่สำเร็จ ข้อมูลไม่ครบ",
-                                            "contents": {
-                                                "type": "bubble",
-                                                "styles": { "body": { "backgroundColor": "#0d161b" } },
-                                                "body": {
-                                                    "type": "box",
-                                                    "layout": "vertical",
-                                                    "spacing": "md",
-                                                    "contents": [
-                                                        { "type": "text", "text": "❌ สมัครสมาชิกไม่สำเร็จ", "weight": "bold", "color": "#ff3333", "size": "md", "align": "center" },
-                                                        { "type": "separator", "color": "#1d2d35" },
-                                                        { "type": "text", "text": "⚠️ กรุณาพิมพ์คั่นด้วยเครื่องหมายสแลส ( / ) ให้ครบทั้ง 3 ส่วน", "size": "xs", "color": "#ff8888", "wrap": true },
-                                                        { "type": "text", "text": "📌 รูปแบบ: C/ชื่อ นามสกุล/ธนาคาร/เลขบัญชี\n👉 ตัวอย่าง: C/นายแจ๊ค เด้งดี/กสิกร/1234567890", "size": "xs", "color": "#00cccc", "wrap": true },
-                                                        { "type": "separator", "color": "#1d2d35" }
-                                                    ]
-                                                }
-                                            }
-                                        }
-                                    ]
+                                    messages: [{
+                                        "type": "text",
+                                        "text": `❌ ไม่พบรหัสยืนยัน [ C/${registerCode} ] ในระบบ\nรหัสนี้อาจถูกใช้งานไปแล้ว หรือคุณกรอกรหัสไม่ถูกต้องครับ`
+                                    }]
                                 }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` } });
-                            } catch (err) { console.error("Error sending register fail flex:", err); }
-                            return res.sendStatus(200);
-                        } else {
+                                return res.sendStatus(200);
+                            }
+
+                            // 🟢 ดึงข้อมูลจาก Firebase
+                            const fullName = webData.name || webData.fullName || "";
+                            const nickname = webData.nickname || webData.lineName || fullName || "สมาชิก";
+                            const bankName = webData.bankName || "";
+                            const bankAccount = webData.bankAccount || webData.accountNumber || "";
+
+                            // 💾 บันทึกข้อมูลลงกระเป๋าเงิน (usersWallets)
                             usersWallets[userId] = {
                                 memberNumber: nextMemberId,
                                 name: fullName,
@@ -3114,79 +2481,85 @@ else if (command.toLowerCase() === "y") {
                                 balance: 0, 
                                 turnoverTarget: 0,
                                 turnoverCount: 0,
-                                isWithdrawLocked: false,     // เพิ่มไว้รองรับระบบถอน
-                                pendingWithdrawAmount: 0,    // เพิ่มไว้รองรับระบบถอน
-                                bankName: bankName,          // 🏦 เก็บข้อมูลธนาคารหลังบ้าน
-                                bankAccount: bankAccount     // 💳 เก็บเลขบัญชีหลังบ้าน
+                                isWithdrawLocked: false,
+                                pendingWithdrawAmount: 0,
+                                bankName: bankName,
+                                bankAccount: bankAccount
                             };
 
-                            // ==================== [ 🚀 ยิง Flex Message แจ้งสมัครสมาชิกใหม่สำเร็จ ] ====================
-                            try {
-                                await axios.post('https://api.line.me/v2/bot/message/reply', {
-                                    replyToken: replyToken,
-                                    messages: [
-                                        {
-                                            "type": "flex",
-                                            "altText": "🎉 ลงทะเบียนสมาชิกใหม่สำเร็จ! 🎉",
-                                            "contents": {
-                                                "type": "bubble",
-                                                "styles": { "body": { "backgroundColor": "#0c1921" } },
-                                                "body": {
-                                                    "type": "box",
-                                                    "layout": "vertical",
-                                                    "spacing": "md",
-                                                    "contents": [
-                                                        { "type": "text", "text": "🎉 ลงทะเบียนสมาชิกใหม่สำเร็จ! 🎉", "weight": "bold", "color": "#00ffcc", "size": "md", "align": "center" },
-                                                        { "type": "separator", "color": "#183242" },
-                                                        {
-                                                            "type": "box",
-                                                            "layout": "vertical",
-                                                            "spacing": "xs",
-                                                            "contents": [
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "🆔 รหัสสมาชิก:", "size": "xs", "color": "#8ab4cd" },
-                                                                        { "type": "text", "text": `${nextMemberId}`, "size": "xs", "color": "#ffffff", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "👤 ชื่อ-นามสกุล:", "size": "xs", "color": "#8ab4cd" },
-                                                                        { "type": "text", "text": `${fullName}`, "size": "xs", "color": "#ffffff", "align": "end" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "🏦 ธนาคาร:", "size": "xs", "color": "#8ab4cd" },
-                                                                        { "type": "text", "text": `${bankName}`, "size": "xs", "color": "#ffffff", "align": "end" }
-                                                                    ]
-                                                                },
-                                                                {
-                                                                    "type": "box", "layout": "horizontal", "contents": [
-                                                                        { "type": "text", "text": "💰 ยอดคงเหลือ:", "size": "xs", "color": "#8ab4cd" },
-                                                                        { "type": "text", "text": "0 บาท", "size": "xs", "color": "#00ff66", "align": "end", "weight": "bold" }
-                                                                    ]
-                                                                }
-                                                            ]
-                                                        },
-                                                        { "type": "separator", "color": "#183242" },
-                                                        { "type": "text", "text": "🔒 ข้อมูลบัญชีธนาคารบันทึกเข้าคลังหลังบ้านปลอดภัย ไม่แสดงหน้ากลุ่มค่ะ", "size": "10px", "color": "#a2c1d4", "wrap": true },
-                                                        { "type": "separator", "color": "#183242" },
-                                                        { "type": "text", "text": "💡 ตอนนี้คุณสามารถส่งโพย หรือ ฝากเครดิตพิมพ์ [ฝาก จำนวนเงิน] ได้เลย", "size": "xs", "color": "#00ffcc", "wrap": true, "style": "italic" }
-                                                    ]
-                                                }
+                            // 🧹 ลบโค้ดนี้ออกจาก pending_verify ใน Firebase
+                            await axios.delete(`${FIREBASE_URL}pending_verify/${pendingCodeKey}.json`);
+
+                            // ==================== [ 🚀 ยิง Flex Message แจ้งสมัครสมาชิกสำเร็จ ] ====================
+                            await axios.post('https://api.line.me/v2/bot/message/reply', {
+                                replyToken: replyToken,
+                                messages: [
+                                    {
+                                        "type": "flex",
+                                        "altText": "🎉 ลงทะเบียนสมาชิกใหม่สำเร็จ! 🎉",
+                                        "contents": {
+                                            "type": "bubble",
+                                            "styles": { "body": { "backgroundColor": "#0c1921" } },
+                                            "body": {
+                                                "type": "box",
+                                                "layout": "vertical",
+                                                "spacing": "md",
+                                                "contents": [
+                                                    { "type": "text", "text": "🎉 ลงทะเบียนสมาชิกใหม่สำเร็จ! 🎉", "weight": "bold", "color": "#00ffcc", "size": "md", "align": "center" },
+                                                    { "type": "separator", "color": "#183242" },
+                                                    {
+                                                        "type": "box",
+                                                        "layout": "vertical",
+                                                        "spacing": "xs",
+                                                        "contents": [
+                                                            {
+                                                                "type": "box", "layout": "horizontal", "contents": [
+                                                                    { "type": "text", "text": "🆔 รหัสสมาชิก:", "size": "xs", "color": "#8ab4cd" },
+                                                                    { "type": "text", "text": `${nextMemberId}`, "size": "xs", "color": "#ffffff", "align": "end", "weight": "bold" }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "box", "layout": "horizontal", "contents": [
+                                                                    { "type": "text", "text": "👤 ชื่อ-นามสกุล:", "size": "xs", "color": "#8ab4cd" },
+                                                                    { "type": "text", "text": `${fullName}`, "size": "xs", "color": "#ffffff", "align": "end" }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "box", "layout": "horizontal", "contents": [
+                                                                    { "type": "text", "text": "🏦 ธนาคาร:", "size": "xs", "color": "#8ab4cd" },
+                                                                    { "type": "text", "text": `${bankName}`, "size": "xs", "color": "#ffffff", "align": "end" }
+                                                                ]
+                                                            },
+                                                            {
+                                                                "type": "box", "layout": "horizontal", "contents": [
+                                                                    { "type": "text", "text": "💰 ยอดคงเหลือ:", "size": "xs", "color": "#8ab4cd" },
+                                                                    { "type": "text", "text": "0 บาท", "size": "xs", "color": "#00ff66", "align": "end", "weight": "bold" }
+                                                                ]
+                                                            }
+                                                        ]
+                                                    },
+                                                    { "type": "separator", "color": "#183242" },
+                                                    { "type": "text", "text": "🔒 ข้อมูลบัญชีธนาคารบันทึกเข้าคลังหลังบ้านปลอดภัย ไม่แสดงหน้ากลุ่มค่ะ", "size": "10px", "color": "#a2c1d4", "wrap": true },
+                                                    { "type": "separator", "color": "#183242" },
+                                                    { "type": "text", "text": "💡 ตอนนี้คุณสามารถส่งโพย หรือ ฝากเครดิตพิมพ์ [ฝาก จำนวนเงิน] ได้เลย", "size": "xs", "color": "#00ffcc", "wrap": true, "style": "italic" }
+                                                ]
                                             }
                                         }
-                                    ]
-                                }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` } });
-                            } catch (err) { console.error("Error sending register success flex:", err); }
+                                    }
+                                ]
+                            }, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` } });
 
                             nextMemberId++;
                             await saveDataToFirebase();
                             return res.sendStatus(200);
+
+                        } catch (err) {
+                            console.error("Error in c/ register process:", err);
+                            return res.sendStatus(200);
                         }
+
                     } else {
-                        // ==================== [ 🚀 ยิง Flex Message แจ้งเตือนให้สมัครสมาชิกก่อนเล่น ] ====================
+                        // ==================== [ 📢 Flex Message แจ้งเตือนคนยังไม่สมัคร ] ====================
                         try {
                             await axios.post('https://api.line.me/v2/bot/message/reply', {
                                 replyToken: replyToken,
@@ -3206,19 +2579,9 @@ else if (command.toLowerCase() === "y") {
                                                     { "type": "separator", "color": "#1d2d35" },
                                                     { "type": "text", "text": "⚠️ คุณยังไม่ได้ลงทะเบียนในระบบ", "size": "xs", "color": "#ffcc00", "align": "center", "weight": "bold" },
                                                     { "type": "separator", "color": "#1d2d35" },
-                                                    { "type": "text", "text": "กรุณาทำตามขั้นตอนด้านล่างเพื่อลงทะเบียน:", "size": "xs", "color": "#cccccc", "wrap": true },
-                                                    {
-                                                        "type": "box",
-                                                        "layout": "vertical",
-                                                        "backgroundColor": "#17262f",
-                                                        "paddingAll": "sm",
-                                                        "contents": [
-                                                            { "type": "text", "text": "พิมพ์: C/ชื่อ นามสกุล/ชื่อไลน์/ธนาคาร/เลขบัญชี", "size": "xs", "color": "#ffffff", "weight": "bold" },
-                                                            { "type": "text", "text": "ตัวอย่าง: C/นายแจ๊ค เด้งดี/แจ๊ค/กสิกร/1234567890", "size": "xs", "color": "#8ab4cd" }
-                                                        ]
-                                                    },
+                                                    { "type": "text", "text": "กรุณาลงทะเบียนผ่านเว็บสมัครสมาชิก จากนั้นคัดลอกรหัส (เช่น C/748100) มาวางในกลุ่มนี้เพื่อเปิดใช้งานครับ", "size": "xs", "color": "#cccccc", "wrap": true },
                                                     { "type": "separator", "color": "#1d2d35" },
-                                                    { "type": "text", "text": "⚠️ กรุณาใช้ชื่อ-นามสกุลให้ตรงกันกับ บช. ที่ใช้ในการฝากของท่าน ⚠️", "size": "11px", "color": "#ff3333", "wrap": true, "align": "center", "weight": "bold" }
+                                                    { "type": "text", "text": "📌 ตัวอย่างการยืนยัน: C/748100", "size": "xs", "color": "#00ffcc", "align": "center", "weight": "bold" }
                                                 ]
                                             }
                                         }
@@ -3231,7 +2594,7 @@ else if (command.toLowerCase() === "y") {
                 } else {
                     // 🟢 กรณีที่เป็นสมาชิกเก่าที่ลงทะเบียนเรียบร้อยแล้ว
                     const user = usersWallets[userId];
-                   
+                    
                    // ==================== [ คำสั่งเช็กยอด c เวอร์ชันการ์ดดำทอง ] ====================
                     if (userMsg === 'c') {
                         // 🛡️ 1. ระบบ Anti-Spam กันสมาชิกกด c ย้ำๆ (ตั้งไว้ที่ 3 วินาทีต่อคน)
@@ -3406,7 +2769,7 @@ else if (command.toLowerCase() === "y") {
             } // ปิดระบบลงทะเบียน
             
             // ==================== [ แก้ไขบั๊ก m 1 2: คำสั่ง m เช็กบัญชีแยกรายคนด้วยเว้นวรรคอย่างแม่นยำ ] ====================
-            if (userMsg.startsWith('m') && !userMsg.includes('-') && !userMsg.endsWith('+') && userMsg !== 'มข' && userMsg !== 'มจ') {
+            if (userMsg.startsWith('m') && !userMsg.includes('-') && !userMsg.endsWith('+') && userMsg !== 'รข' && userMsg !== 'รจ') {
                 // 🚨 กรองขั้นสูงสุด: ถ้าไม่ใช่แอดมินในกล่องกลาง หรือ แอดมินไม่ได้สั่งในแชทส่วนตัว (1 ต่อ 1) ให้บอทเงียบกริบไม่ตอบ
                 if (!ADMIN_IDS.includes(userId) || event.source.type !== 'user') {
                     return res.sendStatus(200);
@@ -3763,7 +3126,14 @@ else if (userMsg === 'สรุป' || userMsg === 'สรุป' || userMsg ===
 
                 replyText = `♻️ รีเซ็ตระบบล้างกระดานสำเร็จเรียบร้อยครับน้า!\n──────────────────\n💰 เครดิตสมาชิกทุกคน: ปรับเป็น 0 บาท\n🔒 เคลียร์ค่าเทิร์นคงค้าง: ปกติทั้งหมด\n📝 ข้อมูลโพยเดิมในรอบ: ล้างกระดานโล่ง 100%\n──────────────────\n✨ พร้อมสำหรับเริ่มเปิดห้องรอบใหม่แล้วครับโผม!`;
             }
-          
+             // ==================== [ 🕒 ระบบดักจับการพิมพ์ตัวเลขนับถอยหลัง 3, 2, 1 ] ====================
+if (userMsg === '3' || userMsg === '2' || userMsg === '1') {
+    // เช็กสิทธิ์แอดมินก่อนทำงาน
+    if (ADMIN_IDS.includes(userId)) {
+        replyText = "COUNTDOWN_IMAGE_TRIGGER"; // 👈 ใส่ข้อความหลอกไว้ เพื่อให้บล็อกส่งไลน์ด้านล่างยอมทำงาน
+    }
+}
+
             // ==================== [ จุดตรวจสอบคัดกรอง: ป้องกันไม่ให้บุคคลทั่วไปใช้งานบอทในแชทส่วนตัว ] ====================
             if (event.source.type === 'user') {
                 // 👥 เช็กว่า ID คนทักอยู่ในกล่องแอดมินรวมไหม ถ้ายืนยันว่าไม่ใช่แอดมิน ให้บอท "นิ่งเงียบสนิท" ทันที
