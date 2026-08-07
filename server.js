@@ -1569,7 +1569,7 @@ else if (originalMsg.startsWith('>')) {
             // เช็กแต้มพิเศษ 7.5 (เจ็ดครึ่ง)
             if (clean === '7.5' || clean === '7.ข') {
                 rawScore = 750; // ชนะ 0-9 แต้มปกติ แต่แพ้ป๊อก 8 และป๊อก 9
-                typeName = "7.5 (เจ็ดครึ่ง)";
+                typeName = "7.5";
             } else {
                 let pts = parseFloat(clean);
                 if (isNaN(pts)) pts = 0;
