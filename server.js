@@ -1545,44 +1545,36 @@ else if (originalMsg.startsWith('>')) {
     } else if (isRoundOpen) {
         replyText = "⚠️ ต้องพิมพ์ปิดรอบแทง (X) และทำขั้นตอนจั่วไพ่ให้เสร็จก่อน จึงจะสรุปผลได้ครับ";
     } else {
-        // 🌟 1. ดึงข้อความ ตัดตัว > ออก แล้วเปลี่ยนทุกการขึ้นบรรทัดใหม่ (\n) ให้กลายเป็นเว้นวรรคธรรมดา
-        let cleanedMsg = originalMsg.substring(1).replace(/[\r\n]+/g, ' ').trim();
-        
-        // 🌟 2. แยกชิ้นส่วนด้วยเว้นวรรคที่ติดกันตั้งแต่ 1 ช่องขึ้นไป
-        const parts = cleanedMsg.split(/\s+/).filter(p => p !== '');
+        let textWithoutArrow = originalMsg.substring(1).trim();
+        const parts = textWithoutArrow.split(/\s+/); // แยกชิ้นส่วนด้วยเว้นวรรคหรือขึ้นบรรทัดใหม่
         
         if (parts.length < 2) {
-            replyText = "⚠️ รูปแบบผิดครับน้า! ต้องพิมพ์เรียง ขา1 ขา2 ... และตัวสุดท้ายคือเจ้ามือ (คั่นด้วยเว้นวรรค)";
+            replyText = "⚠️ รูปแบบผิดครับน้า! ต้องพิมพ์เรียง ขา1 ขา2 ... และตัวสุดท้ายคือเจ้ามือ (คั่นด้วยเว้นวรรคหรือขึ้นบรรทัดใหม่)";
             return res.sendStatus(200);
         }
-        
-        // 🌟 ประกาศตัวแปรไว้ด้านบนสุดเพื่อให้ทุกส่วนเข้าถึงได้
-        let legsFlexContents = [];
 
-        // 🛠️ ฟังก์ชันแกะรหัสไพ่ (นับสแลชแม่นยำ ไม่โดนตัวอื่นแย่ง)
-        const parseCardStr = (str, isDealer = false, isThreeCards = false, forcePok = false) => {
+        // 🛠️ ฟังก์ชันแกะรหัสไพ่ 2 ใบ (8, 9 = ป๊อกอัตโนมัติ / รองรับ 7.5)
+        const parseCardStr = (str) => {
             let clean = str.trim().toLowerCase();
-            let isPok = forcePok; 
             let multiplier = 1; 
             let typeName = "แต้มปกติ";
             let rawScore = 0;
 
-            // 🎯 นับเครื่องหมาย / เพื่อคิดเด้งแบบตรงตัว
+            // นับเครื่องหมาย / คิดเด้ง (มี / คือ 2 เด้ง)
             const slashCount = (clean.match(/\//g) || []).length;
             if (slashCount >= 1) { multiplier = 2; }
             
-            // ลบเครื่องหมาย / ออกทั้งหมดเพื่อส่องดูแต้มเนื้อๆ
             clean = clean.replace(/\//g, '');
 
-           // 🌟 1. เช็กแต้มพิเศษ: 7.5 (เจ็ดครึ่ง)
+            // เช็กแต้มพิเศษ 7.5 (เจ็ดครึ่ง)
             if (clean === '7.5' || clean === '7.ข') {
-                rawScore = 750; // ชนะทุกแต้มปกติ (0-9) แพ้แค่ ป๊อก 8 และ ป๊อก 9
+                rawScore = 750; // ชนะ 0-9 แต้มปกติ แต่แพ้ป๊อก 8 และป๊อก 9
                 typeName = "7.5 (เจ็ดครึ่ง)";
             } else {
                 let pts = parseFloat(clean);
                 if (isNaN(pts)) pts = 0;
                 
-                // 🌟 2. ถ้าเป็นเลข 8 หรือ 9 ถือว่าเป็น ป๊อก อัตโนมัติทุกกรณี (ทั้งเจ้าและผู้เล่น)
+                // 8 หรือ 9 เป็นป๊อกอัตโนมัติเสมอ
                 if (pts === 9) { 
                     rawScore = 900; 
                     typeName = "ป๊อก 9"; 
@@ -1597,7 +1589,7 @@ else if (originalMsg.startsWith('>')) {
             return { score: rawScore, v: clean, mult: multiplier, name: typeName };
         };
 
-        // 👑 แกะรหัสเจ้ามือ (ตัวสุดท้าย - ใช้ฟังก์ชันเดียวกันได้เลย)
+        // 👑 แกะรหัสเจ้ามือ (ตัวสุดท้าย)
         const dealerRawStr = parts[parts.length - 1]; 
         const dealerResult = parseCardStr(dealerRawStr);
 
@@ -1610,7 +1602,7 @@ else if (originalMsg.startsWith('>')) {
             if (innerContent === "") continue;
 
             let currentLeg = i + 1;
-            let result2Cards = parseCardStr(innerContent, false, false);
+            let result2Cards = parseCardStr(innerContent);
 
             roomResults[currentLeg] = {
                 leg: currentLeg,
@@ -1621,7 +1613,47 @@ else if (originalMsg.startsWith('>')) {
         tempRoomResults = roomResults;
         tempDealerResult = dealerResult;
 
-       // 🚀 ยิงข้อความแพ็คคู่: รูปภาพหัวข้อผลลัพธ์ + Flex Message สรุปผลคะแนน
+       // --- 📊 [สร้าง Flex Message แสดงผลแพ้-ชนะ 2 ใบ บรรทัดเดียวต่อขา] ---
+        let legsFlexContents = [];
+
+        for (let leg = 1; leg <= 6; leg++) {
+            if (roomResults[leg]) {
+                const res = roomResults[leg];
+                
+                let statusStr = "เสมอ 🟡"; let color = "#ffcc00";
+                if (res.twoCards.score > dealerResult.score) { statusStr = "ชนะ 🟢"; color = "#00ff66"; }
+                else if (res.twoCards.score < dealerResult.score) { statusStr = "แพ้ 🔴"; color = "#ff3333"; }
+
+                legsFlexContents.push({
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "md",
+                    "spacing": "xs",
+                    "contents": [
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                { "type": "text", "text": `🃏 ขาที่ ${leg}: ${res.twoCards.name} (${res.twoCards.mult}เด้ง)`, "size": "xs", "color": "#ffffff", "weight": "bold" },
+                                { "type": "text", "text": statusStr, "size": "xs", "color": color, "align": "end", "weight": "bold" }
+                            ]
+                        },
+                        { "type": "separator", "color": "#2a2233", "margin": "xs" }
+                    ]
+                });
+            } else {
+                legsFlexContents.push({
+                    "type": "box",
+                    "layout": "horizontal",
+                    "margin": "xs",
+                    "contents": [
+                        { "type": "text", "text": `🃏 ขาที่ ${leg}: ⚠️ ไม่มีผลไพ่`, "size": "xs", "color": "#888888", "style": "italic" },
+                        { "type": "text", "text": "แพ้ 🔴", "size": "xs", "color": "#ff3333", "align": "end", "weight": "bold" }
+                    ]
+                });
+            }
+        }
+
         const summaryImgUrl = "https://img2.pic.in.th/-__-----4b1c38e0628ea626.jpg";
 
         try {
@@ -1657,10 +1689,9 @@ else if (originalMsg.startsWith('>')) {
                                         ]
                                     },
                                     { "type": "separator", "color": "#2a2233" },
-                                    { "type": "text", "text": "📝 ลำดับหน้าไพ่และผลแพ้ชนะแต่ละขา (2 ใบ)", "size": "xs", "color": "#ffaa00", "weight": "bold" },
+                                    { "type": "text", "text": "📝 ลำดับหน้าไพ่และผลแพ้ชนะแต่ละขา", "size": "xs", "color": "#ffaa00", "weight": "bold" },
                                     { "type": "box", "layout": "vertical", "spacing": "xs", "contents": legsFlexContents },
                                     { "type": "separator", "color": "#2a2233" },
-                                    // 🔘 ชุดปุ่มกด ยืนยัน (ok) / ยกเลิก (no)
                                     {
                                         "type": "box",
                                         "layout": "horizontal",
