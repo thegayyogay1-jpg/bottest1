@@ -1312,7 +1312,7 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
                             }
 
                             let currentLineBet = price * legsCount;
-                            let currentLineHold = currentLineBet * 3;
+                            let currentLineHold = currentLineBet * 2;
 
                             totalActualBet += currentLineBet;
                             totalHoldCost += currentLineHold;
@@ -1327,50 +1327,35 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
                         }
 
                         // ==================== [ 🌟 เริ่มต้นระบบค้ำประกันเด้งอัจฉริยะ ] ====================
-                        if (!hasError && totalActualBet > 0) {
-                            let finalHoldCost = 0;
-                            let maxHandMultiplier = 3; 
-                            let limitReasonText = "✨ ค้ำประกัน 3 เด้งสมบูรณ์แบบ";
+                        if (user.balance < doubleHoldCost) {
+                    replyText = `❌ เครดิตของคุณไม่พอสำหรับค้ำประกัน (2 เด้ง) ครับ!\n💸 ยอดแทงรวม: ${totalActualBet} บาท\n🔒 ต้องใช้ยอดค้ำประกัน (x2): ${doubleHoldCost} บาท\n💰 เครดิตปัจจุบันของคุณมี: ${user.balance} บาท`;
+                    hasError = true;
+                } else {
+                    finalHoldCost = doubleHoldCost;
+                }
 
-                            const doubleHoldCost = totalActualBet * 2; 
-                            const tripleHoldCost = totalActualBet * 3; 
+                if (!hasError) {
+                    user.balance -= finalHoldCost; 
+                    await saveDataToFirebase();
+                    
+                    if (!roundBets[userId]) {
+                        roundBets[userId] = [];
+                    }
 
-                            if (user.balance < doubleHoldCost) {
-                                replyText = `❌ เครดิตของคุณไม่พอสำหรับค้ำประกันขั้นต่ำ (2 เด้ง) ครับ!\n💸 ยอดแทงรวม: ${totalActualBet} บาท\n🔒 ต้องใช้ยอดค้ำประกันขั้นต่ำ (x2): ${doubleHoldCost} บาท\n💰 เครดิตปัจจุบันของคุณมี: ${user.balance} บาท`;
-                                hasError = true;
-                            } 
-                            else if (user.balance >= doubleHoldCost && user.balance < tripleHoldCost) {
-                                maxHandMultiplier = 2;
-                                finalHoldCost = doubleHoldCost;
-                                limitReasonText = `⚠️ คิดผลสูงสุดไม่เกิน 2 เด้ง (เครดิตไม่พอค้ำ 3 เด้ง)`;
-                            } 
-                            else {
-                                maxHandMultiplier = 3;
-                                finalHoldCost = tripleHoldCost;
-                            }
-
-                            if (!hasError) {
-                                user.balance -= finalHoldCost; 
-                                await saveDataToFirebase();
-                                
-                                if (!roundBets[userId]) {
-                                    roundBets[userId] = [];
-                                }
-
-                                let itemsFlexContents = [];
-                                
-                                processedBets.forEach((bet) => {
-                                    roundBets[userId].push({
-                                        name: displayName,
-                                        memberNumber: user.memberNumber,
-                                        betType: bet.type,
-                                        detail: bet.detail,
-                                        pricePerLeg: bet.pricePerLeg,
-                                        actualBet: bet.actualBet,
-                                        holdCost: (bet.actualBet * maxHandMultiplier), 
-                                        maxMultiplier: maxHandMultiplier, 
-                                        time: new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })
-                                    });
+                    let itemsFlexContents = [];
+                    
+                    processedBets.forEach((bet) => {
+                        roundBets[userId].push({
+                            name: displayName,
+                            memberNumber: user.memberNumber,
+                            betType: bet.type,
+                            detail: bet.detail,
+                            pricePerLeg: bet.pricePerLeg,
+                            actualBet: bet.actualBet,
+                            holdCost: (bet.actualBet * maxHandMultiplier), 
+                            maxMultiplier: maxHandMultiplier, 
+                            time: new Date().toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })
+                        });
 
                                     itemsFlexContents.push({
                                         "type": "text",
