@@ -1563,39 +1563,37 @@ else if (originalMsg.startsWith('>')) {
 
             // 🎯 นับเครื่องหมาย / เพื่อคิดเด้งแบบตรงตัว
             const slashCount = (clean.match(/\//g) || []).length;
-            if (slashCount === 2) { multiplier = 3; }
-            else if (slashCount === 1) { multiplier = 2; }
+            if (slashCount >= 1) { multiplier = 2; }
             
             // ลบเครื่องหมาย / ออกทั้งหมดเพื่อส่องดูแต้มเนื้อๆ
             clean = clean.replace(/\//g, '');
 
-            // เช็กป๊อกเจ้ามือ
-            if (isDealer && clean.includes('*')) { isPok = true; clean = clean.replace('*', ''); }
-
-            // แปลงแต้มพิเศษ (รองรับทั้งไทยและอังกฤษ)
-            if (clean === 't' || clean === 'ต') { rawScore = 700; multiplier = 5; typeName = "ตอง"; } 
-            else if (clean === 'sf') { rawScore = 600; multiplier = 5; typeName = "สเตฟฟลัช"; } 
-            else if (clean === 'h') { rawScore = 500; multiplier = 3; typeName = "เซียน/3เหลือง"; } 
-            else if (clean === 's' || clean === 'ร') { rawScore = 400; multiplier = 3; typeName = "เรียง"; } 
-            else {
-                let pts = parseInt(clean);
+           // 🌟 1. เช็กแต้มพิเศษ: 7.5 (เจ็ดครึ่ง)
+            if (clean === '7.5' || clean === '7.ข') {
+                rawScore = 750; // ชนะทุกแต้มปกติ (0-9) แพ้แค่ ป๊อก 8 และ ป๊อก 9
+                typeName = "7.5 (เจ็ดครึ่ง)";
+            } else {
+                let pts = parseFloat(clean);
                 if (isNaN(pts)) pts = 0;
                 
-                // สำหรับผู้เล่น ถ้าแต้มเป็น 8 หรือ 9 โดดๆ ให้ถือเป็นไพ่ป๊อกอัตโนมัติ
-                if (isPok) {
-            if (pts === 9) { rawScore = 900; typeName = "ป๊อก 9"; }
-            else if (pts === 8) { rawScore = 800; typeName = "ป๊อก 8"; }
-            else { rawScore = pts; typeName = `${pts} แต้ม`; }
-        } else {
-            rawScore = pts; typeName = `${pts} แต้ม`;
-        }
-    }
-    return { score: rawScore, v: clean, mult: multiplier, name: typeName };
-};
+                // 🌟 2. ถ้าเป็นเลข 8 หรือ 9 ถือว่าเป็น ป๊อก อัตโนมัติทุกกรณี (ทั้งเจ้าและผู้เล่น)
+                if (pts === 9) { 
+                    rawScore = 900; 
+                    typeName = "ป๊อก 9"; 
+                } else if (pts === 8) { 
+                    rawScore = 800; 
+                    typeName = "ป๊อก 8"; 
+                } else { 
+                    rawScore = pts; 
+                    typeName = `${pts} แต้ม`; 
+                }
+            }
+            return { score: rawScore, v: clean, mult: multiplier, name: typeName };
+        };
 
-        // 👑 แกะรหัสเจ้ามือ (ตัวสุดท้าย)
+        // 👑 แกะรหัสเจ้ามือ (ตัวสุดท้าย - ใช้ฟังก์ชันเดียวกันได้เลย)
         const dealerRawStr = parts[parts.length - 1]; 
-        const dealerResult = parseCardStr(dealerRawStr, true, false);
+        const dealerResult = parseCardStr(dealerRawStr);
 
         let roomResults = {}; 
         const totalLegsToSend = Math.min(parts.length - 1, 6);
@@ -1606,105 +1604,18 @@ else if (originalMsg.startsWith('>')) {
             if (innerContent === "") continue;
 
             let currentLeg = i + 1;
-            let result2Cards = null;
-            let result3Cards = null;
+            let result2Cards = parseCardStr(innerContent, false, false);
 
-            // 🔥 [ใช้ระบบ RegEx ชำแหละข้อความขั้นสูง] แยกกลุ่มตัวเลขและเครื่องหมายสแลชออกจากกัน
-           if (innerContent.includes(',')) {
-    // 1. ถ้าแอดมินพิมพ์แบบมีคอมม่าคั่น เช่น 5,sf หรือ 1,s
-    const splitParts = innerContent.split(',');
-    const part1 = splitParts[0].trim();
-    const part2 = splitParts[1].trim();
-    
-    result2Cards = parseCardStr(part1, false, false);
-    result3Cards = parseCardStr(part2, false, true);
-} else {
-    // 2. ถ้าพิมพ์ติดกันแบบปกติ ไม่มีคอมม่า ให้ใช้ RegEx ช่วยผ่าแยก
-    const match = innerContent.match(/^([0-9tshfตร]+(?:\/*))([0-9tshfตร]+(?:\/*))$/i);
-    
-    if (match) {
-        const part1 = match[1]; 
-        const part2 = match[2]; 
-        
-        result2Cards = parseCardStr(part1, false, false);
-        result3Cards = parseCardStr(part2, false, true);
-    } else {
-            // กรณีพิมพ์ตัวเดียวโดดๆ
-                let pts = parseInt(innerContent);
-                if (!isNaN(pts) && (pts === 8 || pts === 9)) {
-                    result2Cards = parseCardStr(innerContent, false, false, true);
-                    result3Cards = parseCardStr(innerContent, false, true, true);
-                } else {
-                    result2Cards = parseCardStr(innerContent, false, false, false);
-                    result3Cards = parseCardStr(innerContent, false, true, false);
-                }
-            }
-           }
             roomResults[currentLeg] = {
                 leg: currentLeg,
-                twoCards: result2Cards,
-                threeCards: result3Cards
+                twoCards: result2Cards
             };
         }
 
         tempRoomResults = roomResults;
         tempDealerResult = dealerResult;
 
-        // --- 📊 [ส่วนสร้างโครงสร้างข้อมูลจัดระเบียบส่งเข้า Flex Message] ---
-        let legsFlexContents = [];
-
-        for (let leg = 1; leg <= 6; leg++) {
-            if (roomResults[leg]) {
-                const res = roomResults[leg];
-                
-                let status2Str = "เสมอ 🟡"; let color2 = "#ffcc00";
-                if (res.twoCards.score > dealerResult.score) { status2Str = "ชนะ 🟢"; color2 = "#00ff66"; }
-                else if (res.twoCards.score < dealerResult.score) { status2Str = "แพ้ 🔴"; color2 = "#ff3333"; }
-
-                let status3Str = "เสมอ 🟡"; let color3 = "#ffcc00";
-                if (res.threeCards.score > dealerResult.score) { status3Str = "ชนะ 🟢"; color3 = "#00ff66"; }
-                else if (res.threeCards.score < dealerResult.score) { status3Str = "แพ้ 🔴"; color3 = "#ff3333"; }
-
-                legsFlexContents.push({
-                    "type": "box",
-                    "layout": "vertical",
-                    "margin": "md",
-                    "spacing": "xs",
-                    "contents": [
-                        { "type": "text", "text": `🃏 ขาที่ ${leg}`, "weight": "bold", "color": "#ffffff", "size": "sm" },
-                        {
-                            "type": "box",
-                            "layout": "horizontal",
-                            "contents": [
-                                { "type": "text", "text": `• [2ใบ]: ${res.twoCards.name} (${res.twoCards.mult}เด้ง)`, "size": "xs", "color": "#cccccc" },
-                                { "type": "text", "text": status2Str, "size": "xs", "color": color2, "align": "end", "weight": "bold" }
-                            ]
-                        },
-                        {
-                            "type": "box",
-                            "layout": "horizontal",
-                            "contents": [
-                                { "type": "text", "text": `• [3ใบ]: ${res.threeCards.name} (${res.threeCards.mult}เด้ง)`, "size": "xs", "color": "#cccccc" },
-                                { "type": "text", "text": status3Str, "size": "xs", "color": color3, "align": "end", "weight": "bold" }
-                            ]
-                        },
-                        { "type": "separator", "color": "#2a2233", "margin": "xs" }
-                    ]
-                });
-            } else {
-                legsFlexContents.push({
-                    "type": "box",
-                    "layout": "horizontal",
-                    "margin": "xs",
-                    "contents": [
-                        { "type": "text", "text": `🃏 ขาที่  ${leg}: ⚠️ ไม่มีผลไพ่`, "size": "xs", "color": "#888888", "style": "italic" },
-                        { "type": "text", "text": "แพ้ 🔴", "size": "xs", "color": "#ff3333", "align": "end", "weight": "bold" }
-                    ]
-                });
-            }
-        }
-
-        // 🚀 ยิงข้อความแพ็คคู่: รูปภาพหัวข้อผลลัพธ์ + Flex Message สรุปผลคะแนน
+       // 🚀 ยิงข้อความแพ็คคู่: รูปภาพหัวข้อผลลัพธ์ + Flex Message สรุปผลคะแนน
         const summaryImgUrl = "https://img2.pic.in.th/-__-----4b1c38e0628ea626.jpg";
 
         try {
@@ -1740,55 +1651,55 @@ else if (originalMsg.startsWith('>')) {
                                         ]
                                     },
                                     { "type": "separator", "color": "#2a2233" },
-                                    { "type": "text", "text": "📝 ลำดับหน้าไพ่และผลแพ้ชนะแต่ละขา", "size": "xs", "color": "#ffaa00", "weight": "bold" },
+                                    { "type": "text", "text": "📝 ลำดับหน้าไพ่และผลแพ้ชนะแต่ละขา (2 ใบ)", "size": "xs", "color": "#ffaa00", "weight": "bold" },
                                     { "type": "box", "layout": "vertical", "spacing": "xs", "contents": legsFlexContents },
                                     { "type": "separator", "color": "#2a2233" },
-                                  // 🔘 [เพิ่มใหม่]: ชุดปุ่มกด ยืนยัน (ok) / ยกเลิก (no)
-                            {
-                                "type": "box",
-                                "layout": "horizontal",
-                                "spacing": "sm",
-                                "margin": "md",
-                                "contents": [
+                                    // 🔘 ชุดปุ่มกด ยืนยัน (ok) / ยกเลิก (no)
                                     {
-                                        "type": "button",
-                                        "style": "primary",
-                                        "color": "#00c853", // สีเขียว
-                                        "height": "sm",
-                                        "action": {
-                                            "type": "message",
-                                            "label": "✅ ยืนยัน",
-                                            "text": "ok" // คำสั่งที่ส่งเข้าแชทเมื่อกดปุ่ม
-                                        }
-                                    },
-                                    {
-                                        "type": "button",
-                                        "style": "primary",
-                                        "color": "#d32f2f", // สีแดง
-                                        "height": "sm",
-                                        "action": {
-                                            "type": "message",
-                                            "label": "❌ ยกเลิก",
-                                            "text": "no" // คำสั่งที่ส่งเข้าแชทเมื่อกดปุ่ม
-                                        }
+                                        "type": "box",
+                                        "layout": "horizontal",
+                                        "spacing": "sm",
+                                        "margin": "md",
+                                        "contents": [
+                                            {
+                                                "type": "button",
+                                                "style": "primary",
+                                                "color": "#00c853",
+                                                "height": "sm",
+                                                "action": {
+                                                    "type": "message",
+                                                    "label": "✅ ยืนยัน",
+                                                    "text": "ok"
+                                                }
+                                            },
+                                            {
+                                                "type": "button",
+                                                "style": "primary",
+                                                "color": "#d32f2f",
+                                                "height": "sm",
+                                                "action": {
+                                                    "type": "message",
+                                                    "label": "❌ ยกเลิก",
+                                                    "text": "no"
+                                                }
+                                            }
+                                        ]
                                     }
                                 ]
                             }
-                        ]
+                        }
                     }
+                ]
+            }, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TOKEN}`
                 }
-            }
-        ]
-    }, {
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${TOKEN}`
+            });
+        } catch (error) {
+            console.error("❌ ส่งรูปภาพและ Flex ตรวจสอบผลล้มเหลว:", error.response ? error.response.data : error.message);
         }
-    });
-} catch (error) {
-    console.error("❌ ส่งรูปภาพและ Flex ตรวจสอบผลล้มเหลว:", error.response ? error.response.data : error.message);
-}
-return res.sendStatus(200);
+        return res.sendStatus(200);
     }
 }
   // ==================== [ 9. ระบบแอดมินยืนยันผลคำนวณเงินจริง OK / NO (Settlement Engine) ] ====================
