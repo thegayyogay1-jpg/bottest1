@@ -1552,6 +1552,9 @@ else if (originalMsg.startsWith('>')) {
             replyText = "⚠️ รูปแบบผิดครับน้า! ต้องพิมพ์เรียง ขา1 ขา2 ... และตัวสุดท้ายคือเจ้ามือ (คั่นด้วยเว้นวรรค)";
             return res.sendStatus(200);
         }
+        
+        // 🌟 ประกาศตัวแปรไว้ด้านบนสุดเพื่อให้ทุกส่วนเข้าถึงได้
+        let legsFlexContents = [];
 
         // 🛠️ ฟังก์ชันแกะรหัสไพ่ (นับสแลชแม่นยำ ไม่โดนตัวอื่นแย่ง)
         const parseCardStr = (str, isDealer = false, isThreeCards = false, forcePok = false) => {
