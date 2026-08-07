@@ -1327,20 +1327,27 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
                         }
 
                         // ==================== [ 🌟 เริ่มต้นระบบค้ำประกันเด้งอัจฉริยะ ] ====================
-                        if (user.balance < doubleHoldCost) {
-                    replyText = `❌ เครดิตของคุณไม่พอสำหรับค้ำประกัน (2 เด้ง) ครับ!\n💸 ยอดแทงรวม: ${totalActualBet} บาท\n🔒 ต้องใช้ยอดค้ำประกัน (x2): ${doubleHoldCost} บาท\n💰 เครดิตปัจจุบันของคุณมี: ${user.balance} บาท`;
-                    hasError = true;
-                } else {
-                    finalHoldCost = doubleHoldCost;
-                }
+                        if (!hasError && totalActualBet > 0) {
+                            let finalHoldCost = 0;
+                            let maxHandMultiplier = 2; // 🔄 [แก้ไข] กำหนดตัวคูณสูงสุดเป็น 2
+                            let limitReasonText = "✨ ค้ำประกัน 2 เด้งสมบูรณ์แบบ";
 
-                if (!hasError) {
-                    user.balance -= finalHoldCost; 
-                    await saveDataToFirebase();
+                            const doubleHoldCost = totalActualBet * 2;
+                            
+                            if (user.balance < doubleHoldCost) {
+                                replyText = `❌ เครดิตของคุณไม่พอสำหรับค้ำประกัน (2 เด้ง) ครับ!\n💸 ยอดแทงรวม: ${totalActualBet} บาท\n🔒 ต้องใช้ยอดค้ำประกัน (x2): ${doubleHoldCost} บาท\n💰 เครดิตปัจจุบันของคุณมี: ${user.balance} บาท`;
+                                hasError = true;
+                            } else {
+                                finalHoldCost = doubleHoldCost;
+                            }
+
+                            if (!hasError) {
+                                user.balance -= finalHoldCost; 
+                                await saveDataToFirebase();
                     
-                    if (!roundBets[userId]) {
-                        roundBets[userId] = [];
-                    }
+                            if (!roundBets[userId]) {
+                                roundBets[userId] = [];
+                            }
 
                     let itemsFlexContents = [];
                     
