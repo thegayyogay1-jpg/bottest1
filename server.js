@@ -1545,8 +1545,11 @@ else if (originalMsg.startsWith('>')) {
     } else if (isRoundOpen) {
         replyText = "⚠️ ต้องพิมพ์ปิดรอบแทง (X) และทำขั้นตอนจั่วไพ่ให้เสร็จก่อน จึงจะสรุปผลได้ครับ";
     } else {
-        let textWithoutArrow = originalMsg.substring(1).trim();
-        const parts = textWithoutArrow.split(/\s+/); // แยกชิ้นส่วนด้วยเว้นวรรคหรือขึ้นบรรทัดใหม่
+        // 🌟 1. ดึงข้อความ ตัดตัว > ออก แล้วเปลี่ยนทุกการขึ้นบรรทัดใหม่ (\n) ให้กลายเป็นเว้นวรรคธรรมดา
+        let cleanedMsg = originalMsg.substring(1).replace(/[\r\n]+/g, ' ').trim();
+        
+        // 🌟 2. แยกชิ้นส่วนด้วยเว้นวรรคที่ติดกันตั้งแต่ 1 ช่องขึ้นไป
+        const parts = cleanedMsg.split(/\s+/).filter(p => p !== '');
         
         if (parts.length < 2) {
             replyText = "⚠️ รูปแบบผิดครับน้า! ต้องพิมพ์เรียง ขา1 ขา2 ... และตัวสุดท้ายคือเจ้ามือ (คั่นด้วยเว้นวรรค)";
