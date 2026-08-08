@@ -1153,7 +1153,7 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
 }
             
         // ==================== [ 4. ระบบรับโพยป๊อกเด้ง + หักค้ำประกัน 3 เด้ง ] ====================
-            else if (originalMsg.includes('-') && !originalMsg.startsWith('C/') && !originalMsg.startsWith('c/')) {
+            else if (originalMsg.includes('/') && !originalMsg.startsWith('C/') && !originalMsg.startsWith('c/')) {
                 if (!isRoundOpen) {
                     replyText = "🚫 ตอนนี้ระบบปิดรับโพยชั่วคราวครับ กรุณารอแอดมินเปิดรอบใหม่";
                 } else {
@@ -1211,10 +1211,10 @@ else if (userMsg === 'o' || userMsg === 'x' || userMsg === 'rst') {
                             let cleanLine = line.trim().toLowerCase();
                             if (cleanLine === "") continue;
 
-                            const parts = cleanLine.split('-');
+                            const parts = cleanLine.split('/');
                             if (parts.length !== 2) {
                                 hasError = true;
-                                errorMsg = `⚠️ รูปแบบโพยไม่ถูกต้องในบรรทัด: "${line}"\n(ตัวอย่าง: 1-100 หรือ 123-100)`;
+                                errorMsg = `⚠️ รูปแบบโพยไม่ถูกต้องในบรรทัด: "${line}"\n(ตัวอย่าง: 1/100 หรือ 123/100)`;
                                 break;
                             }
 
