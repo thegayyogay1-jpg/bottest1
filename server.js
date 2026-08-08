@@ -11,7 +11,7 @@ const TOKEN = process.env.CHANNEL_ACCESS_TOKEN;
 // 👥 [กล่องรวม ID แอดมินกลาง] มีแอดมินเพิ่มมาใส่เพิ่มตรงนี้ที่เดียวจบเลยครับน้า!
 const ADMIN_IDS = [
     "Ub5622951ba512db7f8461fa6675170ba", // แอดมินคนที่ 1
-    "" // แอดมินคนที่ 2
+    "Ueec2768dae0ed0dd3be84b4a8e54d0ee" // แอดมินคนที่ 2
 ];
 
 // 📡 ลิงก์เชื่อมโยงไปยังฐานข้อมูล Firebase ถาวร 
@@ -140,7 +140,7 @@ app.post('/callback', async (req, res) => {
             if (global.depositQueue && global.depositQueue[userId] && global.depositQueue[userId].status === 'WAITING_ADMIN') {
                 const currentQueue = global.depositQueue[userId];
                 const messageId = event.message.id;
-                const ADMIN_ID = "U2fb9233e5c539ae3970cbd698e2e18db";
+                const ADMIN_ID = "Ueec2768dae0ed0dd3be84b4a8e54d0ee";
                 
                 // ⏱️ คำนวณเวลาที่ใช้ไปนับตั้งแต่กดฝาก (หน่วยเป็นนาที)
                 const timeElapsed = (Date.now() - currentQueue.createdAt) / 1000 / 60;
@@ -2321,7 +2321,7 @@ else if (userMsg === 'คส' || userMsg === 'กต' || userMsg === 'บช' ||
                         await saveDataToFirebase(); // เซฟถาวรลง Firebase
 
                        // 🔔 [อัปเดตขั้นสุด] ดึงข้อมูลธนาคาร เลขบัญชี และเครดิตสุทธิคงเหลือในระบบขึ้นโชว์ในการ์ดแอดมิน
-                        const ADMIN_ID = "U2fb9233e5c539ae3970cbd698e2e18db"; // ไอดีไลน์ส่วนตัวของน้า
+                        const ADMIN_ID = "Ueec2768dae0ed0dd3be84b4a8e54d0ee"; // ไอดีไลน์ส่วนตัวของน้า
                         
                         const adminWithdrawAlertFlex = {
                             "type": "flex",
@@ -3291,7 +3291,7 @@ else if (userMsg === 'สรุป' || userMsg === 'สรุป' || userMsg ===
             }
             // ==================== [  คำสั่งแอดมินรีเซ็ตระบบล้างกระดานผ่านแชทส่วนตัว (resetall) ] ====================
             else if (userMsg === 'ล้างระบบ') {
-                const ADMIN_ID = "U2fb9233e5c539ae3970cbd698e2e18db"; // 👑 ไอดี LINE ของคุณน้า
+                const ADMIN_ID = "Ueec2768dae0ed0dd3be84b4a8e54d0ee"; // 👑 ไอดี LINE ของคุณน้า
                 
                 // 🚨 กรองขั้นสูงสุด: ถ้าไม่ใช่แอดมิน หรือ แอดมินไม่ได้สั่งในแชทส่วนตัว (1 ต่อ 1) ให้บอทเงียบกริบไม่ตอบ
                 if (userId !== ADMIN_ID || event.source.type !== 'user') {
