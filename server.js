@@ -1561,10 +1561,10 @@ else if (originalMsg.startsWith('>')) {
             let rawScore = 0;
 
             // นับเครื่องหมาย / คิดเด้ง (มี / คือ 2 เด้ง)
-            const slashCount = (clean.match(/\//g) || []).length;
+            const slashCount = (clean.match(/z//g) || []).length;
             if (slashCount >= 1) { multiplier = 2; }
             
-            clean = clean.replace(/\//g, '');
+            clean = clean.replace(/z//g, '');
 
             // เช็กแต้มพิเศษ 7.5 (เจ็ดครึ่ง)
             if (clean === '7.5' || clean === '7.ข') {
